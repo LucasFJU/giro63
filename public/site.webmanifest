@@ -1,0 +1,21 @@
+{
+  "name": "Giro63 — O Tocantins em movimento",
+  "short_name": "Giro63",
+  "lang": "pt-BR",
+  "start_url": "/",
+  "display": "browser",
+  "background_color": "#fbfaf7",
+  "theme_color": "#ED521A",
+  "icons": [
+    {
+      "src": "/icons/android-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/android-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

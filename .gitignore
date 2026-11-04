@@ -1,0 +1,18 @@
+node_modules/
+.npm-cache/
+data/
+public/uploads/
+backups/
+*.log
+.env
+
+# Cloud credentials and local operational data
+.env.*
+!.env.example
+.vercel/
+.supabase/
+supabase/.temp/
+exports/
+coverage/
+/*.jpg
+/*.png

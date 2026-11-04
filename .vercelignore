@@ -1,0 +1,10 @@
+node_modules
+.npm-cache
+data
+backups
+public/uploads
+exports
+.env*
+.git
+/*.jpg
+/*.png
