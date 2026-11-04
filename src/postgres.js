@@ -23,7 +23,14 @@ export function postgresSql(input) {
 
 export function openPostgres(connectionString,{pool:providedPool}={}) {
   if(!connectionString)throw Error('DATABASE_URL não configurada.');
-  const pool=providedPool||new pg.Pool({connectionString,max:3,idleTimeoutMillis:20000,connectionTimeoutMillis:10000,application_name:'giro63'});
+  if(!providedPool){
+    try{
+      const parsed=new URL(connectionString);
+      if(!['postgres:','postgresql:'].includes(parsed.protocol)||!parsed.hostname||!parsed.password)throw Error();
+      decodeURIComponent(parsed.username);decodeURIComponent(parsed.password);
+    }catch{throw Error('DATABASE_URL inválida: use a conexão PostgreSQL completa, com a senha codificada na URL.');}
+  }
+  const pool=providedPool||new pg.Pool({connectionString,max:1,idleTimeoutMillis:20000,connectionTimeoutMillis:10000,application_name:'giro63'});
   const context=new AsyncLocalStorage();
   const query=(sql,values=[]) => (context.getStore()||pool).query(postgresSql(sql),values);
   const numbers=row=>row&&Object.fromEntries(Object.entries(row).map(([k,v])=>[k,typeof v==='string'&&/^(id|author_id|ad_id|last_id|n|total|views|reads|impressions|clicks|expires|expires_at)$/.test(k)&&/^-?\d+$/.test(v)?Number(v):v]));

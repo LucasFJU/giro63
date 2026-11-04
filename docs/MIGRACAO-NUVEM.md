@@ -39,3 +39,11 @@ npm run backup continua protegendo o modo local. O backup da nuvem deve incluir 
 exports/import-postgres.sql contém dados sensíveis da migração e permanece ignorado no Git. Não importar novamente sobre um destino preenchido. Credenciais, .vercel, bancos, backups e uploads locais ficam fora do repositório.
 
 A auditoria npm de 04/11/2026 apontou quatro alertas moderados na cadeia de ferramenta jake/filelist/minimatch do EJS. Não foi aplicada atualização forçada de versão principal.
+
+## Verificação da implantação — 04/11/2026
+
+As duas variáveis pendentes foram cadastradas como Secret em Production e Preview. A primeira prévia revelou incompatibilidade CommonJS/ESM entre sanitize-html e htmlparser2 na Vercel; sanitize-html permanece na versão 2.18.1 com htmlparser2 10.0.0, compatível com require. Os testes também foram executados com --no-experimental-require-module.
+
+A transferência das duas artes agora é executada no build remoto com scripts/deploy-media.js, usando migration-assets/manifest.json. O processo atualiza somente os endereços legados exatos e preserva alterações posteriores da redação. Nenhuma credencial precisa ser copiada para o computador.
+
+A validação remota parou antes da transferência: DATABASE_URL foi identificada como inválida. É necessário corrigir seu valor nos dois ambientes para continuar. A chave do Storage e o funcionamento público ainda não foram validados. A branch principal continua preservada; não considerar as prévias com erro uma publicação concluída.

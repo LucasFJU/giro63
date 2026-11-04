@@ -13,6 +13,9 @@ import {popularArticles,publicCities} from '../src/reader-experience.js';
 import {SQLiteSessionStore} from '../src/security.js';
 
 test('PostgreSQL: parâmetros, schema privado, conflitos e sessões',async()=>{
+  assert.throws(()=>openPostgres('senha-isolada'),/DATABASE_URL inválida/);
+  assert.throws(()=>openPostgres('postgresql://postgres@localhost/postgres'),/DATABASE_URL inválida/);
+  assert.throws(()=>openPostgres('postgresql://postgres:percentual%zz@localhost/postgres'),/DATABASE_URL inválida/);
   assert.equal(postgresSql("SELECT '?',? AS value, 'it''s ?'"),"SELECT '?',$1 AS value, 'it''s ?'");
   const engine=new PGlite();await engine.exec('CREATE ROLE anon; CREATE ROLE authenticated;');
   await engine.exec(readFileSync(new URL('../db/schema-postgres.sql',import.meta.url),'utf8'));
