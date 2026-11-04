@@ -31,6 +31,8 @@ export function openDatabase(directory) {
     CREATE INDEX IF NOT EXISTS articles_category ON articles(category,status);
     CREATE TABLE IF NOT EXISTS article_daily_reads(article_id INTEGER NOT NULL REFERENCES articles(id),day TEXT NOT NULL,views INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(article_id,day));
     CREATE INDEX IF NOT EXISTS article_reads_day ON article_daily_reads(day,article_id);
+    CREATE TABLE IF NOT EXISTS article_read_windows(session_hash TEXT NOT NULL,article_id INTEGER NOT NULL REFERENCES articles(id),expires_at INTEGER NOT NULL,PRIMARY KEY(session_hash,article_id));
+    CREATE INDEX IF NOT EXISTS article_read_windows_expiry ON article_read_windows(expires_at);
   `);
   if(!db.prepare('PRAGMA table_info(articles)').all().some(c=>c.name==='cover_alt'))db.exec("ALTER TABLE articles ADD COLUMN cover_alt TEXT NOT NULL DEFAULT ''");
   const adColumns=new Set(db.prepare('PRAGMA table_info(ads)').all().map(c=>c.name));

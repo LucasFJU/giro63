@@ -3,6 +3,7 @@ import { mkdir, cp, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { root } from '../src/server.js';
 import { openDatabase } from '../src/db.js';
+if(process.env.DATABASE_URL)throw Error('Este comando faz backup do modo local. Para a nuvem, inclua PostgreSQL e Storage conforme docs/MIGRACAO-NUVEM.md.');
 const db=openDatabase(process.env.GIRO63_DATA_DIR||path.join(root,'data'));
 const destination=path.join(root,'backups',new Date().toISOString().replace(/[:.]/g,'-'));
 await mkdir(destination,{recursive:true});

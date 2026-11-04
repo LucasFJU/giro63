@@ -1,19 +1,49 @@
-# Migração Giro63 — em preparação
+# Migração Giro63
 
-Destino GitHub confirmado: LucasFJU/giro63 (privado).
-Destino Vercel confirmado: lucas-evangelistas-projects-da289f0d.
-Destino Supabase confirmado: conexão Giro63; seu identificador ainda não aparece nas ferramentas desta sessão. Não substituir por Primary ou Site MF.
+Atualizado em 4 de novembro de 2026. A implantação pública ainda não foi validada.
 
-O aplicativo em npm start ainda usa SQLite e uploads locais. Não publicar esse comando na Vercel antes de portar o acesso ao banco, sessões, uploads, contadores e bloqueio de login para armazenamento compartilhado.
+## Destinos
 
-Clientes pg e @supabase/supabase-js instalados com versões fixadas. O arquivo .env.example contém somente nomes e valores não secretos. Credenciais, banco, backups e imagens enviadas permanecem fora do Git e dos arquivos de implantação.
+- GitHub privado: LucasFJU/giro63.
+- Vercel: giro63, equipe lucas-evangelistas-projects-da289f0d.
+- Supabase: conexão Giro63, projeto tmmsfyubaqnptmstshym, us-east-2.
 
-A tentativa de criar um projeto separado na conexão Primary foi recusada por limite de dois projetos gratuitos ativos de LucasFJU. Nenhum projeto existente foi pausado ou alterado.
+## Concluído
 
-A conexão Vercel atual só lista Mundo dos Ferros. O destino solicitado retornou 403; a geração de link de autorização retornou 404, tanto por ID retornado quanto pelo slug fornecido. É necessário disponibilizar o acesso à equipe correta antes de criar o projeto Giro63.
+- Backup anterior: backups/2026-11-04T16-08-52-675Z.
+- Schema privado giro63 criado, sem acesso para anon ou authenticated, com índices, busca normalizada e transações.
+- Importados 1 acesso da redação, 7 categorias, 16 matérias, 2 campanhas, configurações e agregados anteriores. Sessões e tokens antigos não foram importados.
+- Bucket giro63-media criado para imagens públicas, com escrita pelo servidor, formatos JPEG/PNG/WebP e limite de 8 MB.
+- SESSION_SECRET gerado e salvo como Secret na Vercel, em Production e Preview. SUPABASE_URL e SUPABASE_STORAGE_BUCKET configurados nos mesmos ambientes.
+- Código adaptado para PostgreSQL assíncrono, sessões compartilhadas e Storage. SQLite permanece disponível localmente sem DATABASE_URL.
+- Entrada Express app.js para Node 24 e versões responsivas estáticas preparadas. Testes existentes e teste PostgreSQL/PGlite passaram.
 
-O plugin GitHub identifica LucasFJU, mas não oferece criação de repositório nesta sessão. O formulário de criação no navegador exige login. Não foi criado repositório remoto nem publicada aplicação.
+## Pendente para ativar
 
-Backup anterior à preparação: backups/2026-11-02T18-30-50-336Z.
+1. Configurar DATABASE_URL (Transaction Pooler do projeto, com TLS) e SUPABASE_SECRET_KEY na Vercel, em Production e Preview. Não enviar valores no chat nem colocá-los no Git. A consulta ao painel foi bloqueada pela permissão de navegação a supabase.com.
+2. Disponibilizar as variáveis em arquivo local ignorado e executar node --env-file=.env.cloud scripts/migrate-media.js. O script transfere os uploads antigos e atualiza seus endereços no PostgreSQL, preservando os originais locais.
+3. Criar prévia na Vercel e validar login existente, redação, uploads, anúncios, métricas e persistência no projeto real. PGlite não substitui essa validação.
+4. Conferir templates, assets e cookies no ambiente Linux da Vercel. Publicar pelo código-fonte, sem reutilizar o pacote prebuilt produzido no Windows.
+5. Após verificar, publicar em Production e definir a URL pública em /admin/portal. Indexação permanece desativada; documentos legais ainda exigem revisão e dados reais.
 
-Próximas etapas: habilitar as conexões de destino; criar recursos separados; converter as operações síncronas SQLite em acesso assíncrono PostgreSQL; mover mídias para Storage; persistir sessões e identificadores temporários; testar migração e permissões; enviar código ao repositório privado; criar implantação de prévia sem indexação; conferir os fluxos completos antes de liberar domínio.
+## Operação
+
+DATABASE_URL ativa PostgreSQL. Na Vercel, sua ausência impede iniciar com SQLite por engano. SESSION_SECRET precisa de pelo menos 48 caracteres. SUPABASE_SECRET_KEY é usada somente no servidor.
+
+Uploads enviados pela função ficam limitados a 4 MB na nuvem para respeitar o limite de corpo da Vercel. No modo local, permanecem em 8 MB. A interface mostra o limite do ambiente.
+
+Sessões, tokens de audiência, janelas temporárias de leitura e bloqueio de login ficam no banco. O bloqueio usa HMAC do endereço da conexão, sem IP em texto; a janela de leitura usa hash do identificador aleatório da sessão e expira em 30 minutos.
+
+npm run backup continua protegendo o modo local. O backup da nuvem deve incluir um dump do schema giro63 e os objetos do bucket giro63-media. O SQLite local não é cópia atualizada do portal publicado. Definir retenção e rotina de backup remoto antes da operação editorial real.
+
+exports/import-postgres.sql contém dados sensíveis da migração e permanece ignorado no Git. Não importar novamente sobre um destino preenchido. Credenciais, .vercel, bancos, backups e uploads locais ficam fora do repositório.
+
+A auditoria npm de 04/11/2026 apontou quatro alertas moderados na cadeia de ferramenta jake/filelist/minimatch do EJS. Não foi aplicada atualização forçada de versão principal.
+
+## Verificação da implantação — 04/11/2026
+
+As duas variáveis pendentes foram cadastradas como Secret em Production e Preview. A primeira prévia revelou incompatibilidade CommonJS/ESM entre sanitize-html e htmlparser2 na Vercel; sanitize-html permanece na versão 2.18.1 com htmlparser2 10.0.0, compatível com require. Os testes também foram executados com --no-experimental-require-module.
+
+A transferência das duas artes agora é executada no build remoto com scripts/deploy-media.js, usando migration-assets/manifest.json. O processo atualiza somente os endereços legados exatos e preserva alterações posteriores da redação. Nenhuma credencial precisa ser copiada para o computador.
+
+A validação remota parou antes da transferência: DATABASE_URL foi identificada como inválida. É necessário corrigir seu valor nos dois ambientes para continuar. A chave do Storage e o funcionamento público ainda não foram validados. A branch principal continua preservada; não considerar as prévias com erro uma publicação concluída.

@@ -1,0 +1,16 @@
+[
+  {
+    "table": "ads",
+    "column": "image",
+    "id": 1,
+    "oldUrl": "/uploads/6ea285193e7a7f08d6e25361074a47c7b3ef6157.webp",
+    "filename": "6ea285193e7a7f08d6e25361074a47c7b3ef6157.webp"
+  },
+  {
+    "table": "ads",
+    "column": "image",
+    "id": 2,
+    "oldUrl": "/uploads/f2a03c90930f4567ea82b77b4cb76afd4ae5a95d.webp",
+    "filename": "f2a03c90930f4567ea82b77b4cb76afd4ae5a95d.webp"
+  }
+]

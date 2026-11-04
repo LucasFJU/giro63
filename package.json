@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Portal editorial local do Tocantins",
   "engines": {
-    "node": ">=24.0.0"
+    "node": "24.x"
   },
   "scripts": {
     "start": "node src/server.js",
@@ -30,10 +30,16 @@
     "helmet": "^8.1.0",
     "multer": "^2.0.2",
     "pg": "8.23.1",
-    "sanitize-html": "^2.17.0",
+    "sanitize-html": "2.18.1",
     "sharp": "^0.35.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.14",
     "supertest": "^7.1.4"
+  },
+  "overrides": {
+    "sanitize-html": {
+      "htmlparser2": "10.0.0"
+    }
   }
 }

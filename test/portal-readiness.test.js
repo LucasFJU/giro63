@@ -13,7 +13,7 @@ const csrf=page=>page.text.match(/name="csrf-token" content="([^"]+)"/)[1];
 const audienceToken=page=>page.text.match(/name="audience-token" content="([^"]*)"/)[1];
 const setting=(key,value)=>db.prepare('UPDATE settings SET value=? WHERE key=?').run(value,key);
 async function login(email){const agent=request.agent(server),page=await agent.get('/admin/login');await agent.post('/admin/login').type('form').send({_csrf:csrf(page),email,password:'Senha de teste exclusiva!'}).expect(302);return agent;}
-before(async()=>{dir=mkdtempSync(path.join(os.tmpdir(),'giro63-ready-'));app=createApp({dataDir:dir,uploadDir:path.join(dir,'uploads')});db=app.locals.db;server=app.listen(0,'127.0.0.1');for(const role of ['editor','author'])db.prepare('INSERT INTO users(name,email,password,role) VALUES(?,?,?,?)').run(role,role+'@example.test',hashPassword('Senha de teste exclusiva!'),role);editor=await login('editor@example.test');author=await login('author@example.test');});
+before(async()=>{dir=mkdtempSync(path.join(os.tmpdir(),'giro63-ready-'));app=(await createApp({dataDir:dir,uploadDir:path.join(dir,'uploads')}));db=app.locals.db;server=app.listen(0,'127.0.0.1');for(const role of ['editor','author'])db.prepare('INSERT INTO users(name,email,password,role) VALUES(?,?,?,?)').run(role,role+'@example.test',hashPassword('Senha de teste exclusiva!'),role);editor=await login('editor@example.test');author=await login('author@example.test');});
 after(async()=>{await new Promise(resolve=>server.close(resolve));db.close();rmSync(dir,{recursive:true,force:true,maxRetries:5,retryDelay:150});});
 test('metadados, compartilhamento, paginação e bloqueio inicial de indexação',async()=>{
  const home=await request(server).get('/').expect(200);assert.match(home.headers['x-robots-tag'],/noindex/);assert.match(home.text,/og-giro63.png/);assert.match(home.text,/apple-touch-icon/);
@@ -53,7 +53,7 @@ test('audiência respeita aceite, recusa, token único, expiração e exclusão 
 test('relatórios e limpeza de audiência, filtros e permissões',async()=>{
  db.prepare("INSERT INTO audience_daily VALUES('2020-01-01','/',999)").run();
  // A new application runs the startup retention cleanup against the same database.
- const reopened=createApp({dataDir:dir,uploadDir:path.join(dir,'uploads')});reopened.locals.db.close();assert.equal(db.prepare("SELECT COUNT(*) n FROM audience_daily WHERE day='2020-01-01'").get().n,0);
+ const reopened=(await createApp({dataDir:dir,uploadDir:path.join(dir,'uploads')}));reopened.locals.db.close();assert.equal(db.prepare("SELECT COUNT(*) n FROM audience_daily WHERE day='2020-01-01'").get().n,0);
  const report=await editor.get('/admin/audiencia').expect(200);assert.match(report.text,/1 visualizações/);assert.match(report.text,/\/pagina\/sobre/);await author.get('/admin/audiencia').expect(403);await request(server).get('/admin/audiencia').expect(302);
  await editor.get('/admin/audiencia?from=2026-02-30&to=2026-03-01').expect(400);await editor.get('/admin/audiencia?from=2020-01-01&to=2026-01-01').expect(400);
  const totals=db.prepare('SELECT SUM(views) n FROM audience_daily').get().n;assert.equal(totals,1);assert.equal(db.prepare('SELECT COUNT(*) n FROM ad_daily').get().n,0);
