@@ -14,7 +14,7 @@ document.querySelectorAll('form').forEach(form=>{
   form.addEventListener('input',event=>{const field=event.target;if(field.getAttribute('aria-invalid')==='true'){field.removeAttribute('aria-invalid');const note=document.getElementById((field.id||field.name)+'-validation');if(note)note.textContent='';}});
   form.querySelectorAll('input[type=file]').forEach(input=>{
     const note=document.createElement('p');note.className='upload-feedback';note.setAttribute('role','status');input.after(note);
-    input.addEventListener('change',()=>{const file=input.files[0];input.setCustomValidity('');if(!file){note.textContent='Nenhum novo arquivo selecionado.';return;}let error='';if(file.size>8*1024*1024)error='Selecione uma imagem de até 8 MB.';else if(!['image/jpeg','image/png','image/webp'].includes(file.type))error='Selecione uma imagem JPG, PNG ou WebP estática.';note.textContent=error||file.name+' · '+(file.size/1024/1024).toFixed(2)+' MB';input.setCustomValidity(error);});
+    input.addEventListener('change',()=>{const file=input.files[0];input.setCustomValidity('');if(!file){note.textContent='Nenhum novo arquivo selecionado.';return;}let error='';if(file.size>Number(input.dataset.maxMb||8)*1024*1024)error='Selecione uma imagem de até '+(input.dataset.maxMb||8)+' MB.';else if(!['image/jpeg','image/png','image/webp'].includes(file.type))error='Selecione uma imagem JPG, PNG ou WebP estática.';note.textContent=error||file.name+' · '+(file.size/1024/1024).toFixed(2)+' MB';input.setCustomValidity(error);});
   });
   form.addEventListener('submit',async event=>{
     if(event.defaultPrevented)return;event.preventDefault();if(sending)return;

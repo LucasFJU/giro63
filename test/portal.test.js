@@ -16,7 +16,7 @@ async function csrfFor(agent,url='/admin/noticias/nova'){return token(await agen
 const fields={title:'Uma reportagem para testar o Giro63',summary:'Um resumo verificado para a matéria de teste.',body:'<p>Conteúdo apurado com contexto e fontes.</p>',category:'cidades',city:'Palmas',credit:'Equipe de testes',sources:'Entrevista de teste',demo:'',featured:'0'};
 async function postArticle(agent,url,values={},image=null){let r=agent.post(url).field('_csrf',await csrfFor(agent));for(const [k,v]of Object.entries({...fields,...values}))r=r.field(k,String(v));if(image)r=r.attach('image',image,{filename:'capa.png',contentType:'image/png'});return r;}
 before(async()=>{
-  dir=mkdtempSync(path.join(os.tmpdir(),'giro63-test-'));app=createApp({dataDir:dir,uploadDir:path.join(dir,'uploads'),seed:true});db=app.locals.db;
+  dir=mkdtempSync(path.join(os.tmpdir(),'giro63-test-'));app=(await createApp({dataDir:dir,uploadDir:path.join(dir,'uploads'),seed:true}));db=app.locals.db;
   server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
   for(const [name,email,role]of [['Editor','editor@example.test','editor'],['Autor','autor@example.test','author'],['Outra pessoa','outra@example.test','author']])db.prepare('INSERT INTO users(name,email,password,role) VALUES(?,?,?,?)').run(name,email,hashPassword(password),role);
   editor=await login('editor@example.test');author=await login('autor@example.test');other=await login('outra@example.test');
@@ -106,7 +106,7 @@ test('configurações validam URLs e refletem contatos no site',async()=>{
   assert.match((await request(app).get('/pagina/contato')).text,/redacao@example.test/);
 });
 test('dados e sessões sobrevivem à reabertura da aplicação',async()=>{
-  const second=createApp({dataDir:dir,uploadDir:path.join(dir,'uploads'),seed:true});
+  const second=(await createApp({dataDir:dir,uploadDir:path.join(dir,'uploads'),seed:true}));
   try{assert.equal(second.locals.db.prepare('SELECT count(*) AS n FROM articles').get().n,db.prepare('SELECT count(*) AS n FROM articles').get().n);assert.equal(second.locals.db.prepare('SELECT value FROM settings WHERE key=?').get('email').value,'redacao@example.test');const sessionCount=second.locals.db.prepare('SELECT count(*) n FROM sessions').get().n;assert.ok(sessionCount>0);await request(second).get('/').expect(200);}finally{second.locals.db.close();}
 });
 test('logout encerra a sessão',async()=>{const agent=await login('editor@example.test');await agent.post('/admin/logout').type('form').send({_csrf:await csrfFor(agent)}).expect(302);await agent.get('/admin').expect(302).expect('Location','/admin/login');});

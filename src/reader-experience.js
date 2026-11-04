@@ -1,24 +1,37 @@
 import { cities, slugify } from './db.js';
+import {createHash} from 'node:crypto';
+import {transaction} from './postgres.js';
 
 export function dayInSaoPaulo(now=Date.now()){
   const p=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(now)).map(p=>[p.type,p.value]));
   return `${p.year}-${p.month}-${p.day}`;
 }
-export function popularArticles(db,now=Date.now()){
+export async function popularArticles(db,now=Date.now()){
   const today=dayInSaoPaulo(now),start=new Date(Date.parse(today+'T12:00:00Z')-6*86400000).toISOString().slice(0,10);
-  return db.prepare("SELECT a.*,SUM(r.views) AS reads FROM articles a JOIN article_daily_reads r ON a.id=r.article_id WHERE a.status='published' AND r.day BETWEEN ? AND ? GROUP BY a.id HAVING SUM(r.views)>0 ORDER BY reads DESC,a.published_at DESC,a.id DESC LIMIT 5").all(start,today);
+  return (await db.prepare("SELECT a.*,SUM(r.views) AS reads FROM articles a JOIN article_daily_reads r ON a.id=r.article_id WHERE a.status='published' AND r.day BETWEEN ? AND ? GROUP BY a.id HAVING SUM(r.views)>0 ORDER BY reads DESC,a.published_at DESC,a.id DESC LIMIT 5").all(start,today));
 }
-export function recordArticleRead(db,{method,session,user,article},now=Date.now()){
+export async function recordArticleRead(db,{method,session,user,article,sessionId},now=Date.now()){
   if(method!=='GET'||user||article.status!=='published')return false;
   const recent=Object.fromEntries(Object.entries(session.articleReadAt||{}).filter(([,time])=>Number.isFinite(time)&&now-time<1800000));
   const key=String(article.id);
   if(Object.hasOwn(recent,key)){session.articleReadAt=recent;return false;}
-  db.prepare('INSERT INTO article_daily_reads(article_id,day,views) VALUES(?,?,1) ON CONFLICT(article_id,day) DO UPDATE SET views=views+1').run(article.id,dayInSaoPaulo(now));
+  if(sessionId){
+    const hash=createHash('sha256').update(sessionId).digest('hex');
+    const counted=await transaction(db,async()=>{
+      if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(hash+':'+key);
+      await db.prepare('DELETE FROM article_read_windows WHERE expires_at<=?').run(now);
+      const window=await db.prepare('SELECT expires_at FROM article_read_windows WHERE session_hash=? AND article_id=?').get(hash,article.id);
+      if(window){recent[key]=window.expires_at-1800000;return false;}
+      await db.prepare('INSERT INTO article_read_windows(session_hash,article_id,expires_at) VALUES(?,?,?)').run(hash,article.id,now+1800000);
+      await db.prepare('INSERT INTO article_daily_reads(article_id,day,views) VALUES(?,?,1) ON CONFLICT(article_id,day) DO UPDATE SET views=views+1').run(article.id,dayInSaoPaulo(now));recent[key]=now;return true;
+    });session.articleReadAt=recent;return counted;
+  }
+  (await db.prepare('INSERT INTO article_daily_reads(article_id,day,views) VALUES(?,?,1) ON CONFLICT(article_id,day) DO UPDATE SET views=views+1').run(article.id,dayInSaoPaulo(now)));
   recent[key]=now;session.articleReadAt=recent;return true;
 }
-export function publicCities(db){
+export async function publicCities(db){
   const map=new Map(cities.map(city=>[slugify(city),city]));
-  for(const {city} of db.prepare("SELECT DISTINCT city FROM articles WHERE status='published' AND TRIM(city)<>'' ORDER BY city").all()){const name=city.trim();if(!map.has(slugify(name)))map.set(slugify(name),name);}
+  for(const {city} of (await db.prepare("SELECT DISTINCT city FROM articles WHERE status='published' AND TRIM(city)<>'' ORDER BY city").all())){const name=city.trim();if(!map.has(slugify(name)))map.set(slugify(name),name);}
   return [...map.values()].sort((a,b)=>a.localeCompare(b,'pt-BR'));
 }
 export function homepageSections(all){

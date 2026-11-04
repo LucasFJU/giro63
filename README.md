@@ -119,3 +119,9 @@ A nova audiência está em /admin/audiencia, restrita a editores. Mostra visuali
 Os contadores de Mais lidas, as métricas publicitárias e as sessões existentes permanecem independentes do consentimento para a nova audiência. As páginas legais descrevem essa distinção e apontam a revisão pendente de retenção desses históricos, backups e futura hospedagem. Os backups habituais já incluem audiência, configurações e textos legais. Os textos são bases editáveis, sem declaração automática de conformidade; devem ser completados e revisados antes do lançamento. Nome do responsável, e-mail de privacidade e textos de pelo menos 100 caracteres são exigidos para marcar documentos como revisados. Alterar texto ou contato na interface desmarca a revisão para nova conferência.
 
 Formulários POST recebem indicação de envio e bloqueio de repetição. Com JavaScript ativo, erros do servidor/conexão preservam o formulário aberto e indicam campos quando identificados. Em falha incerta de conexão, confira a lista antes de repetir um cadastro. Sem JavaScript permanece o envio tradicional; uploads não podem ser reconstituídos pelo navegador, exigindo nova seleção após um erro.
+
+## Implantação Supabase e Vercel
+
+Consulte [docs/MIGRACAO-NUVEM.md](docs/MIGRACAO-NUVEM.md) para o estado da migração e as verificações pendentes. O modo local continua em SQLite. Com DATABASE_URL, o servidor usa PostgreSQL e Supabase Storage; na Vercel, cookies de sessão exigem HTTPS. npm run backup protege o modo local, não o banco remoto.
+
+Os tokens de audiência agora ficam no banco com expiração e consumo único, permitindo usar mais de uma instância. Janelas temporárias de leitura e limitação de login também são compartilhadas. Não há Analytics externo.

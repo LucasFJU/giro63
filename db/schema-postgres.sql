@@ -1,4 +1,4 @@
--- Estrutura proposta para revisão; não aplicada automaticamente.
+-- Estrutura Giro63. Aplicar uma única vez pelo processo de migração.
 -- Todas as tabelas permanecem em schema privado sem permissões para anon/authenticated.
 BEGIN;
 CREATE SCHEMA IF NOT EXISTS giro63;
@@ -15,6 +15,8 @@ CREATE TABLE giro63.sessions (sid text PRIMARY KEY, data text NOT NULL, expires 
 CREATE INDEX sessions_expiry ON giro63.sessions(expires);
 CREATE TABLE giro63.article_daily_reads (article_id bigint NOT NULL REFERENCES giro63.articles(id), day text NOT NULL, views integer NOT NULL DEFAULT 0, PRIMARY KEY(article_id,day));
 CREATE INDEX article_reads_day ON giro63.article_daily_reads(day,article_id);
+CREATE TABLE giro63.article_read_windows(session_hash text NOT NULL,article_id bigint NOT NULL REFERENCES giro63.articles(id),expires_at bigint NOT NULL,PRIMARY KEY(session_hash,article_id));
+CREATE INDEX article_read_windows_expiry ON giro63.article_read_windows(expires_at);
 CREATE TABLE giro63.ad_rotation (position text PRIMARY KEY, last_id bigint NOT NULL);
 CREATE TABLE giro63.ad_deliveries (token text PRIMARY KEY, ad_id bigint NOT NULL REFERENCES giro63.ads(id), expires_at bigint NOT NULL, viewed integer NOT NULL DEFAULT 0, clicked integer NOT NULL DEFAULT 0);
 CREATE INDEX ad_deliveries_expiry ON giro63.ad_deliveries(expires_at);
@@ -23,6 +25,16 @@ CREATE TABLE giro63.audience_daily (day text NOT NULL, path text NOT NULL, views
 CREATE TABLE giro63.audience_deliveries (token_hash text PRIMARY KEY, path text NOT NULL, expires_at bigint NOT NULL, used integer NOT NULL DEFAULT 0);
 CREATE INDEX audience_deliveries_expiry ON giro63.audience_deliveries(expires_at);
 CREATE TABLE giro63.login_attempts (key_hash text PRIMARY KEY, attempts integer NOT NULL DEFAULT 0, expires_at bigint NOT NULL);
+CREATE INDEX login_attempts_expiry ON giro63.login_attempts(expires_at);
+CREATE INDEX articles_author ON giro63.articles(author_id);
+CREATE INDEX ad_deliveries_ad ON giro63.ad_deliveries(ad_id);
+CREATE FUNCTION giro63.normalize_search(value text) RETURNS text LANGUAGE sql IMMUTABLE STRICT SET search_path='' AS $$
+  SELECT translate(lower(value), 'áàâãäåéèêëíìîïóòôõöúùûüçñ', 'aaaaaaeeeeiiiiooooouuuucn')
+$$;
 REVOKE ALL ON ALL TABLES IN SCHEMA giro63 FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA giro63 FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA giro63 FROM PUBLIC, anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA giro63 REVOKE ALL ON TABLES FROM PUBLIC, anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA giro63 REVOKE ALL ON SEQUENCES FROM PUBLIC, anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA giro63 REVOKE ALL ON FUNCTIONS FROM PUBLIC, anon, authenticated;
 COMMIT;

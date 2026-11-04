@@ -1,0 +1,6 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "express",
+  "installCommand": "npm ci --omit=dev",
+  "functions": {"index.js": {"includeFiles": "views/**", "excludeFiles": "{data,backups,exports,public/uploads}/**", "maxDuration": 60}}
+}

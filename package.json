@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Portal editorial local do Tocantins",
   "engines": {
-    "node": ">=24.0.0"
+    "node": "24.x"
   },
   "scripts": {
     "start": "node src/server.js",
@@ -34,6 +34,7 @@
     "sharp": "^0.35.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.14",
     "supertest": "^7.1.4"
   }
 }

@@ -1,4 +1,5 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes,createHash } from 'node:crypto';
+import { transaction } from './postgres.js';
 import { dayInSaoPaulo } from './reader-experience.js';
 import { slugify } from './db.js';
 
@@ -39,24 +40,28 @@ Privacidade e atualizações
 O tratamento de dados é descrito na Política de Privacidade. Alterações destes termos deverão ter data e versão atualizadas. Dados do responsável, canais de atendimento e revisão jurídica/editorial devem ser concluídos antes do lançamento.`};
 
 export function legalReady(settings,key){return settings[key+'_reviewed']==='1'&&!!settings.legal_owner.trim()&&/^\S+@\S+\.\S+$/.test(settings.privacy_email)&&settings[key+'_text'].trim().length>=100;}
-export function originFor(settings){return settings.public_url||`http://localhost:${process.env.PORT||3000}`;}
+export function originFor(settings){return settings.public_url||process.env.PUBLIC_URL||(process.env.VERCEL_URL?'https://'+process.env.VERCEL_URL:`http://localhost:${process.env.PORT||3000}`);}
 export function validPublicUrl(value){try{const u=new URL(value);return ['http:','https:'].includes(u.protocol)&&!u.username&&!u.password&&u.pathname==='/'&&!u.search&&!u.hash?u.origin:'';}catch{return '';}}
 const xml=value=>String(value).replace(/[<>&"']/g,c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'}[c]));
 const cookie=req=>String(req.headers.cookie||'').split(';').map(v=>v.trim()).includes('giro63.statistics=accepted');
 const validDay=value=>/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value;
 
-export function mountPortal(app,{db,requireUser,editor,checkCsrf,flash}){
-  const insert=db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');for(const [k,v] of Object.entries(portalDefaults))insert.run(k,v);
-  db.exec('CREATE TABLE IF NOT EXISTS audience_daily(day TEXT NOT NULL,path TEXT NOT NULL,views INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(day,path))');
-  const tokens=new Map();let lastCleanup='';
-  const cleanup=(now=Date.now())=>{
-    for(const [key,token] of tokens)if(token.expires<=now)tokens.delete(key);
-    const today=dayInSaoPaulo(now);if(today!==lastCleanup){const limit=new Date(today+'T12:00:00Z');limit.setUTCFullYear(limit.getUTCFullYear()-1);db.prepare('DELETE FROM audience_daily WHERE day<?').run(limit.toISOString().slice(0,10));lastCleanup=today;}
+export async function mountPortal(app,{db,requireUser,editor,checkCsrf,flash}){
+  const insert=db.prepare('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)');for(const [k,v] of Object.entries(portalDefaults))(await insert.run(k,v));
+  if(db.dialect!=='postgres'){
+    await db.exec('CREATE TABLE IF NOT EXISTS audience_daily(day TEXT NOT NULL,path TEXT NOT NULL,views INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(day,path))');
+    await db.exec('CREATE TABLE IF NOT EXISTS audience_deliveries(token_hash TEXT PRIMARY KEY,path TEXT NOT NULL,expires_at BIGINT NOT NULL,used INTEGER NOT NULL DEFAULT 0)');
+  }
+  const tokenHash=value=>createHash('sha256').update(value).digest('hex');let lastCleanup='';
+  const cleanup=async (now=Date.now())=>{
+    await db.prepare('DELETE FROM audience_deliveries WHERE expires_at<=?').run(now);
+    const today=dayInSaoPaulo(now);if(today!==lastCleanup){const limit=new Date(today+'T12:00:00Z');limit.setUTCFullYear(limit.getUTCFullYear()-1);(await db.prepare('DELETE FROM audience_daily WHERE day<?').run(limit.toISOString().slice(0,10)));lastCleanup=today;}
   };
-  cleanup();
+  (await cleanup());
   app.use((req,res,next)=>{
     const render=res.render.bind(res);
-    res.render=(view,data={},callback)=>{
+    const renderPage=async (view,data={},callback)=>{
+      if(data.error)data={...data,error:String(data.error).replaceAll('8 MB',(res.locals.uploadLimitMb||8)+' MB')};
       const values={...res.locals,...data},s=values.settings,base=originFor(s),fieldErrors={...(data.fieldErrors||{})};
       if(values.error){
         const add=name=>{fieldErrors[name]=values.error;};
@@ -79,20 +84,21 @@ export function mountPortal(app,{db,requireUser,editor,checkCsrf,flash}){
       const noindex=s.indexing!=='1'||!s.public_url||req.path.startsWith('/admin')||req.path==='/busca'||res.statusCode>=400||!!values.article?.demo||(view==='legal'&&!legalReady(s,values.legalKey));
       if(noindex)res.set('X-Robots-Tag','noindex, nofollow');
       const image=values.article?.cover&&values.editorialImage?values.editorialImage(values.article.cover).src:'/images/og-giro63.png';
-      const metadata={url:base+canonical,image:base+image,type:view==='article'?'article':'website'};
+      const metadata={url:base+canonical,image:new URL(image,base).href,type:view==='article'?'article':'website'};
       let token='';const measurable=req.method==='GET'&&!values.user&&res.statusCode===200&&['home','listing','article','institutional','legal'].includes(view)&&req.path!=='/busca';
-      if(measurable){cleanup();if(tokens.size>=10000)tokens.delete(tokens.keys().next().value);token=randomBytes(24).toString('hex');tokens.set(token,{path:req.path,expires:Date.now()+300000});res.set('Cache-Control','private, no-store');}
+      if(measurable){await cleanup();token=randomBytes(24).toString('hex');await db.prepare('INSERT INTO audience_deliveries(token_hash,path,expires_at) VALUES(?,?,?)').run(tokenHash(token),req.path,Date.now()+300000);res.set('Cache-Control','private, no-store');}
       return render(view,{...data,title,description,metadata,noindex,audienceToken:token,fieldErrors},callback);
     };
+    res.render=(...args)=>renderPage(...args).catch(next);
     res.locals.audienceToken='';res.locals.noindex=true;next();
   });
   app.get('/robots.txt',(req,res)=>{const s=res.locals.settings;res.type('text/plain').send(s.indexing==='1'&&s.public_url?`User-agent: *\nDisallow: /admin\nDisallow: /busca\nSitemap: ${s.public_url}/sitemap.xml\n`:'User-agent: *\nDisallow: /\n');});
-  app.get('/sitemap.xml',(req,res)=>{
+  app.get('/sitemap.xml',async (req,res)=>{
     const s=res.locals.settings;if(!s.public_url)return res.status(503).set('Retry-After','3600').type('text/plain').send('Configure a URL pública antes de gerar o sitemap.');
     if(s.indexing!=='1')return res.type('application/xml').send('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>');
     const entries=['/','/ultimas',...['sobre','expediente','politica-editorial','contato','anuncie'].map(p=>'/pagina/'+p)];
     if(legalReady(s,'privacy'))entries.push('/pagina/privacidade');if(legalReady(s,'terms'))entries.push('/pagina/termos-de-uso');
-    const articles=db.prepare("SELECT slug,category,city FROM articles WHERE status='published' AND demo=0 ORDER BY published_at DESC").all();
+    const articles=(await db.prepare("SELECT slug,category,city FROM articles WHERE status='published' AND demo=0 ORDER BY published_at DESC").all());
     for(const a of articles){entries.push('/noticia/'+a.slug,'/editoria/'+a.category);if(a.city.trim())entries.push('/cidade/'+slugify(a.city));}
     res.type('application/xml').send('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+[...new Set(entries)].map(p=>'<url><loc>'+xml(s.public_url+p)+'</loc></url>').join('')+'</urlset>');
   });
@@ -103,22 +109,29 @@ export function mountPortal(app,{db,requireUser,editor,checkCsrf,flash}){
     res.cookie('giro63.statistics',req.body.choice,{expires,sameSite:'lax',httpOnly:true,secure:req.secure,path:'/'});res.set('Cache-Control','no-store').sendStatus(204);
   });
   app.get('/preferencias-cookies',(req,res)=>res.set('Cache-Control','no-store').json({choice:cookie(req)?'accepted':String(req.headers.cookie||'').split(';').some(v=>v.trim()==='giro63.statistics=rejected')?'rejected':null}));
-  app.post('/audiencia/visualizacao',checkCsrf,(req,res)=>{
-    cleanup();res.set('Cache-Control','no-store');const token=tokens.get(String(req.body.token||''));
-    if(res.locals.user||!cookie(req)||!token)return res.sendStatus(403);
-    tokens.delete(req.body.token);db.prepare('INSERT INTO audience_daily(day,path,views) VALUES(?,?,1) ON CONFLICT(day,path) DO UPDATE SET views=views+1').run(dayInSaoPaulo(),token.path);res.sendStatus(204);
+  app.post('/audiencia/visualizacao',checkCsrf,async (req,res)=>{
+    await cleanup();res.set('Cache-Control','no-store');
+    if(res.locals.user||!cookie(req)||!/^[a-f0-9]{48}$/.test(String(req.body.token||'')))return res.sendStatus(403);
+    const recorded=await transaction(db,async()=>{
+      const hash=tokenHash(req.body.token);
+      if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(hashtext(?))').get(hash);
+      const token=await db.prepare('SELECT * FROM audience_deliveries WHERE token_hash=? AND expires_at>? AND used=0').get(hash,Date.now());
+      if(!token)return false;
+      await db.prepare('UPDATE audience_deliveries SET used=1 WHERE token_hash=?').run(hash);
+      await db.prepare('INSERT INTO audience_daily(day,path,views) VALUES(?,?,1) ON CONFLICT(day,path) DO UPDATE SET views=views+1').run(dayInSaoPaulo(),token.path);return true;
+    });res.sendStatus(recorded?204:403);
   });
-  app.get('/admin/audiencia',requireUser,editor,(req,res)=>{
-    cleanup();const today=dayInSaoPaulo(),defaultFrom=new Date(Date.parse(today+'T12:00:00Z')-29*86400000).toISOString().slice(0,10);
+  app.get('/admin/audiencia',requireUser,editor,async (req,res)=>{
+    (await cleanup());const today=dayInSaoPaulo(),defaultFrom=new Date(Date.parse(today+'T12:00:00Z')-29*86400000).toISOString().slice(0,10);
     let from=String(req.query.from||defaultFrom),to=String(req.query.to||today),error='';
     if(!validDay(from)||!validDay(to)||from>to||Date.parse(to)-Date.parse(from)>365*86400000){error='Escolha datas válidas e um período de até 366 dias.';from=defaultFrom;to=today;res.status(400);}
-    const rows=db.prepare('SELECT day,SUM(views) views FROM audience_daily WHERE day BETWEEN ? AND ? GROUP BY day ORDER BY day').all(from,to);
-    const pages=db.prepare('SELECT path,SUM(views) views FROM audience_daily WHERE day BETWEEN ? AND ? GROUP BY path ORDER BY views DESC,path LIMIT 100').all(from,to);
+    const rows=(await db.prepare('SELECT day,SUM(views) views FROM audience_daily WHERE day BETWEEN ? AND ? GROUP BY day ORDER BY day').all(from,to));
+    const pages=(await db.prepare('SELECT path,SUM(views) views FROM audience_daily WHERE day BETWEEN ? AND ? GROUP BY path ORDER BY views DESC,path LIMIT 100').all(from,to));
     const days=[];for(let date=Date.parse(from+'T12:00:00Z');date<=Date.parse(to+'T12:00:00Z');date+=86400000){const day=new Date(date).toISOString().slice(0,10);days.push(rows.find(r=>r.day===day)||{day,views:0});}
     res.render('audience',{title:'Audiência',from,to,error,days,pages,total:rows.reduce((sum,r)=>sum+r.views,0)});
   });
   app.get('/admin/portal',requireUser,editor,(req,res)=>res.render('portal-settings',{title:'Busca e privacidade',error:'',fieldErrors:{}}));
-  app.post('/admin/portal',requireUser,editor,checkCsrf,(req,res)=>{
+  app.post('/admin/portal',requireUser,editor,checkCsrf,async (req,res)=>{
     const old=res.locals.settings,settings={...old};for(const k of ['public_url','legal_owner','privacy_email','privacy_text','terms_text'])settings[k]=String(req.body[k]||'').trim().slice(0,k.endsWith('_text')?20000:250);
     settings.indexing=req.body.indexing==='on'?'1':'0';settings.privacy_reviewed=req.body.privacy_reviewed==='on'?'1':'0';settings.terms_reviewed=req.body.terms_reviewed==='on'?'1':'0';const fieldErrors={};
     if(settings.public_url&&!validPublicUrl(settings.public_url))fieldErrors.public_url='Use a origem completa, como https://seu-dominio.com.br, sem caminhos ou credenciais.';
@@ -127,7 +140,7 @@ export function mountPortal(app,{db,requireUser,editor,checkCsrf,flash}){
     if(settings.privacy_email&&!/^\S+@\S+\.\S+$/.test(settings.privacy_email))fieldErrors.privacy_email='Informe um e-mail válido.';
     for(const key of ['privacy','terms'])if(settings[key+'_reviewed']==='1'&&!legalReady(settings,key)){fieldErrors[key+'_reviewed']='Preencha responsável, contato de privacidade e texto com pelo menos 100 caracteres antes de marcar como revisado.';}
     if(Object.keys(fieldErrors).length)return res.status(400).render('portal-settings',{title:'Revise as configurações',settings,error:'Revise os campos indicados. Nenhuma alteração foi salva.',fieldErrors});
-    const update=db.prepare('UPDATE settings SET value=? WHERE key=?');db.exec('BEGIN');try{for(const k of Object.keys(portalDefaults)){if(k.endsWith('_updated'))continue;update.run(settings[k],k);}for(const key of ['privacy','terms'])if(settings[key+'_text']!==old[key+'_text']||settings[key+'_reviewed']!==old[key+'_reviewed']||settings.legal_owner!==old.legal_owner||settings.privacy_email!==old.privacy_email)update.run(new Date().toISOString(),key+'_updated');db.exec('COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+    const update=db.prepare('UPDATE settings SET value=? WHERE key=?');await transaction(db,async()=>{for(const k of Object.keys(portalDefaults)){if(k.endsWith('_updated'))continue;(await update.run(settings[k],k));}for(const key of ['privacy','terms'])if(settings[key+'_text']!==old[key+'_text']||settings[key+'_reviewed']!==old[key+'_reviewed']||settings.legal_owner!==old.legal_owner||settings.privacy_email!==old.privacy_email)(await update.run(new Date().toISOString(),key+'_updated')); });
     flash(req,'Busca e privacidade atualizadas.');res.redirect('/admin/portal');
   });
 }

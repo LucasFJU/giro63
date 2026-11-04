@@ -20,7 +20,7 @@ test('campanhas: datas de São Paulo e limites de início e término',()=>{
   assert.equal(campaignState({...ad,active:0},Date.parse(start)),'paused');assert.equal(campaignState({...ad,archived:1},Date.parse(start)),'archived');
 });
 
-test('migração preserva anúncios legados, rodízio e métricas persistem sem duplicação',()=>{
+test('migração preserva anúncios legados, rodízio e métricas persistem sem duplicação',async ()=>{
   const dir=mkdtempSync(path.join(os.tmpdir(),'giro63-ads-'));let db;
   try{
     const legacy=new DatabaseSync(path.join(dir,'giro63.sqlite'));legacy.exec("CREATE TABLE ads(id INTEGER PRIMARY KEY,name TEXT NOT NULL,image TEXT NOT NULL,alt TEXT NOT NULL,link TEXT NOT NULL DEFAULT '',position TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1); INSERT INTO ads(name,image,alt,link,position) VALUES('Legado','/images/cerrado.jpg','Descrição','https://example.com','top');");legacy.close();
@@ -31,18 +31,18 @@ test('migração preserva anúncios legados, rodízio e métricas persistem sem 
     insert.run('Arquivada','/image','Arte','','top',1,1,null,null);
     insert.run('Futura','/image','Arte','','top',1,0,'2030-01-01T03:00:00.000Z',null);
     insert.run('Encerrada','/image','Arte','','top',1,0,null,'2020-01-01T03:00:00.000Z');
-    const now=Date.parse('2026-11-10T02:59:59Z'),one=selectAd(db,'top',now);assert.equal(one.id,1);assert.equal(db.prepare('SELECT COUNT(*) n FROM ad_daily').get().n,0);
-    db.close();db=openDatabase(dir);assert.equal(selectAd(db,'top',now).id,2);assert.equal(selectAd(db,'top',now).id,1);
-    recordAdEvent(db,one.deliveryToken,'impression',now);recordAdEvent(db,one.deliveryToken,'impression',now);recordAdEvent(db,one.deliveryToken,'click',now);recordAdEvent(db,one.deliveryToken,'click',now);
+    const now=Date.parse('2026-11-10T02:59:59Z'),one=(await selectAd(db,'top',now));assert.equal(one.id,1);assert.equal(db.prepare('SELECT COUNT(*) n FROM ad_daily').get().n,0);
+    db.close();db=openDatabase(dir);assert.equal((await selectAd(db,'top',now)).id,2);assert.equal((await selectAd(db,'top',now)).id,1);
+    (await recordAdEvent(db,one.deliveryToken,'impression',now));(await recordAdEvent(db,one.deliveryToken,'impression',now));(await recordAdEvent(db,one.deliveryToken,'click',now));(await recordAdEvent(db,one.deliveryToken,'click',now));
     const daily=db.prepare('SELECT * FROM ad_daily').get();assert.equal(daily.day,'2026-11-09');assert.equal(daily.impressions,1);assert.equal(daily.clicks,1);
-    assert.equal(recordAdEvent(db,'fake','impression',now),null);assert.equal(recordAdEvent(db,one.deliveryToken,'impression',now+3600000),null);
-    const noLink=selectAd(db,'top',now);assert.equal(recordAdEvent(db,noLink.deliveryToken,'click',now),null);assert.equal(selectAd(db,'sidebar',now),null);
-    db.close();db=openDatabase(dir);assert.equal(db.prepare('SELECT clicks FROM ad_daily').get().clicks,1);recordAdEvent(db,one.deliveryToken,'click',now);assert.equal(db.prepare('SELECT clicks FROM ad_daily').get().clicks,1);
+    assert.equal((await recordAdEvent(db,'fake','impression',now)),null);assert.equal((await recordAdEvent(db,one.deliveryToken,'impression',now+3600000)),null);
+    const noLink=(await selectAd(db,'top',now));assert.equal((await recordAdEvent(db,noLink.deliveryToken,'click',now)),null);assert.equal((await selectAd(db,'sidebar',now)),null);
+    db.close();db=openDatabase(dir);assert.equal(db.prepare('SELECT clicks FROM ad_daily').get().clicks,1);(await recordAdEvent(db,one.deliveryToken,'click',now));assert.equal(db.prepare('SELECT clicks FROM ad_daily').get().clicks,1);
   }finally{db?.close();rmSync(dir,{recursive:true,force:true});}
 });
 
 test('gestão de campanhas: permissões, programação, prévia, cliques, relatório e arquivo',async()=>{
-  const dir=mkdtempSync(path.join(os.tmpdir(),'giro63-ad-http-'));const app=createApp({dataDir:dir,uploadDir:path.join(dir,'uploads'),seed:false}),db=app.locals.db;
+  const dir=mkdtempSync(path.join(os.tmpdir(),'giro63-ad-http-'));const app=(await createApp({dataDir:dir,uploadDir:path.join(dir,'uploads'),seed:false})),db=app.locals.db;
   const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
   try{
     for(const role of ['editor','author'])db.prepare('INSERT INTO users(name,email,password,role) VALUES(?,?,?,?)').run(role,role+'@example.test',hashPassword('Senha de teste exclusiva 63!'),role);
