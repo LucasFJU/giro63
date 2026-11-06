@@ -1,1 +1,167 @@
-<%- include('header') %><main id="main" class="container admin-main"><div class="page-heading"><span class="tiny-label">ESTATÍSTICAS LOCAIS</span><h1>Audiência</h1><p>Visualizações autorizadas para estatísticas. Estes totais não representam pessoas únicas.</p></div><% if(error){ %><div class="form-error" role="alert"><%= error %></div><% } %><form method="get" class="audience-filters"><div><label for="from">De</label><input type="date" id="from" name="from" value="<%= from %>" required></div><div><label for="to">Até</label><input type="date" id="to" name="to" value="<%= to %>" required></div><button class="button">Aplicar período</button></form><section class="form-card"><h2><%= total.toLocaleString('pt-BR') %> visualizações</h2><p class="field-help">Horário de São Paulo · retenção de 12 meses · equipe e prévias excluídas.</p><% if(!total){ %><p>Ainda não há visualizações autorizadas neste período. O relatório será preenchido conforme as pessoas aceitarem estatísticas e acessarem o portal.</p><% } %><h3>Evolução diária</h3><div class="audience-days"><% const peak=Math.max(1,...days.map(d=>d.views));days.forEach(day=>{ %><div><time datetime="<%= day.day %>"><%= day.day.split('-').reverse().join('/') %></time><progress max="<%= peak %>" value="<%= day.views %>" aria-label="<%= day.views %> visualizações em <%= day.day %>"></progress><span><%= day.views %></span></div><% }) %></div></section><section class="form-card"><h2>Páginas mais acessadas</h2><p class="field-help">Até 100 páginas, sem parâmetros de URL nem termos pesquisados.</p><div class="table-wrap"><table><thead><tr><th>Página</th><th>Visualizações</th></tr></thead><tbody><% pages.forEach(page=>{ %><tr><td><a href="<%= page.path %>" target="_blank" rel="noopener"><%= page.path %></a></td><td><%= page.views %></td></tr><% }) %><% if(!pages.length){ %><tr><td colspan="2">Nenhum registro no período.</td></tr><% } %></tbody></table></div></section></main><%- include('footer') %>
+<%- include('header') %>
+<%
+  const nf = n => Number(n).toLocaleString('pt-BR');
+  const full = d => d.split('-').reverse().join('/');
+  const short = d => d.slice(8) + '/' + d.slice(5, 7);
+  const niceMax = v => { if (v <= 4) return 4; const pow = Math.pow(10, Math.floor(Math.log10(v))); const f = v / pow; const step = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10; return step * pow; };
+  const peak = Math.max(...days.map(d => d.views), 0);
+  const top = niceMax(peak), ticks = [0, 1, 2, 3, 4].map(i => (top / 4) * i);
+  const W = 860, H = 280, L = 52, R = 12, T = 14, B = 34, pw = W - L - R, ph = H - T - B;
+  const slot = pw / Math.max(1, days.length), barW = Math.max(1.5, Math.min(28, slot * 0.72));
+  const labelEvery = Math.max(1, Math.ceil(days.length / 8));
+  const delta = hasPrevious ? ((total - previous) / previous) * 100 : null;
+  const maxPage = Math.max(1, ...pages.map(p => p.views));
+%>
+<main id="main" class="container admin-main audience-page">
+  <div class="section-heading">
+    <div>
+      <span class="tiny-label">ESTATÍSTICAS LOCAIS</span>
+      <h1>Audiência</h1>
+      <p>Visualizações de quem aceitou estatísticas. Os totais não representam pessoas únicas.</p>
+    </div>
+  </div>
+
+  <% if(error){ %><div class="form-error" role="alert"><%= error %></div><% } %>
+
+  <section class="audience-toolbar" aria-label="Período do relatório">
+    <nav class="audience-presets" aria-label="Períodos rápidos">
+      <% presets.forEach(p => { %><a href="?from=<%= p.from %>&amp;to=<%= p.to %>" class="<%= p.active ? 'active' : '' %>" <%- p.active ? 'aria-current="true"' : '' %>><%= p.label %></a><% }) %>
+    </nav>
+    <form method="get" class="audience-range">
+      <div><label for="from">De</label><input type="date" id="from" name="from" value="<%= from %>" max="<%= today %>" required></div>
+      <div><label for="to">Até</label><input type="date" id="to" name="to" value="<%= to %>" max="<%= today %>" required></div>
+      <button class="button">Aplicar</button>
+    </form>
+  </section>
+  <p class="audience-range-note">Exibindo <strong><%= full(from) %></strong> a <strong><%= full(to) %></strong> · <%= span %> <%= span === 1 ? 'dia' : 'dias' %> · horário de São Paulo · equipe e prévias excluídas · retenção de 12 meses.</p>
+
+  <section class="audience-kpis" aria-label="Resumo do período">
+    <article class="audience-kpi kpi-main">
+      <span class="kpi-label">Visualizações</span>
+      <strong class="kpi-value"><%= nf(total) %></strong>
+      <% if(delta !== null){ %>
+        <span class="kpi-delta <%= delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat' %>">
+          <span aria-hidden="true"><%= delta > 0 ? '▲' : delta < 0 ? '▼' : '■' %></span>
+          <%= Math.abs(delta).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) %>%
+          <span class="sr-only"><%= delta > 0 ? 'a mais' : delta < 0 ? 'a menos' : 'sem variação' %></span>
+          <small>vs. <%= full(previousRange.from) %> a <%= full(previousRange.to) %></small>
+        </span>
+      <% } else { %><span class="kpi-delta flat"><small>Sem dados no período anterior para comparar</small></span><% } %>
+    </article>
+    <article class="audience-kpi">
+      <span class="kpi-label">Média por dia</span>
+      <strong class="kpi-value"><%= average.toLocaleString('pt-BR', { maximumFractionDigits: 1 }) %></strong>
+      <small class="kpi-note">em <%= span %> <%= span === 1 ? 'dia' : 'dias' %></small>
+    </article>
+    <article class="audience-kpi">
+      <span class="kpi-label">Melhor dia</span>
+      <strong class="kpi-value"><%= best.views ? nf(best.views) : '—' %></strong>
+      <small class="kpi-note"><%= best.views ? full(best.day) : 'Sem registros' %></small>
+    </article>
+    <article class="audience-kpi">
+      <span class="kpi-label">Páginas com acesso</span>
+      <strong class="kpi-value"><%= nf(pages.length) %><% if(pages.length >= 100){ %>+<% } %></strong>
+      <small class="kpi-note"><%= pages.length >= 100 ? 'exibindo as 100 mais vistas' : 'páginas diferentes' %></small>
+    </article>
+  </section>
+
+  <% if(!total){ %>
+    <section class="form-card audience-empty">
+      <h2>Ainda não há visualizações neste período</h2>
+      <p>O relatório é preenchido conforme as pessoas aceitam estatísticas e acessam o portal. Experimente ampliar o período ou conferir o aviso de cookies no rodapé do site.</p>
+    </section>
+  <% } else { %>
+
+  <section class="form-card audience-card">
+    <div class="audience-card-head">
+      <h2>Evolução diária</h2>
+      <span class="field-help">Pico: <%= nf(peak) %> em <%= full(best.day) %></span>
+    </div>
+    <figure class="audience-chart">
+      <svg viewBox="0 0 <%= W %> <%= H %>" role="img" aria-label="Gráfico de barras com as visualizações por dia. Total de <%= nf(total) %> em <%= span %> dias. Os valores diários estão na tabela abaixo.">
+        <% ticks.forEach(v => { const y = T + ph - (v / top) * ph; %>
+          <line class="grid" x1="<%= L %>" x2="<%= W - R %>" y1="<%= y.toFixed(1) %>" y2="<%= y.toFixed(1) %>"/>
+          <text class="axis" x="<%= L - 8 %>" y="<%= (y + 4).toFixed(1) %>" text-anchor="end"><%= nf(Math.round(v)) %></text>
+        <% }) %>
+        <% days.forEach((d, i) => { const h = (d.views / top) * ph, x = L + i * slot + (slot - barW) / 2, y = T + ph - h; %>
+          <rect class="bar <%= d.views && d.day === best.day ? 'peak' : '' %> <%= d.views ? '' : 'zero' %>" x="<%= x.toFixed(1) %>" y="<%= (d.views ? y : T + ph - 1).toFixed(1) %>" width="<%= barW.toFixed(1) %>" height="<%= (d.views ? Math.max(1.5, h) : 1).toFixed(1) %>" rx="2"><title><%= full(d.day) %>: <%= nf(d.views) %> <%= d.views === 1 ? 'visualização' : 'visualizações' %></title></rect>
+          <% if(i % labelEvery === 0 || i === days.length - 1 && (days.length - 1) % labelEvery > labelEvery / 2){ %>
+            <text class="axis" x="<%= (x + barW / 2).toFixed(1) %>" y="<%= H - 10 %>" text-anchor="middle"><%= short(d.day) %></text>
+          <% } %>
+        <% }) %>
+      </svg>
+      <figcaption class="sr-only">Visualizações por dia entre <%= full(from) %> e <%= full(to) %>.</figcaption>
+    </figure>
+    <details class="audience-details">
+      <summary>Ver valores de cada dia</summary>
+      <div class="table-wrap audience-scroll">
+        <table class="audience-table">
+          <thead><tr><th scope="col">Dia</th><th scope="col" class="num">Visualizações</th></tr></thead>
+          <tbody><% days.slice().reverse().forEach(d => { %><tr><td><time datetime="<%= d.day %>"><%= full(d.day) %></time></td><td class="num"><%= nf(d.views) %></td></tr><% }) %></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <div class="audience-split">
+    <section class="form-card audience-card">
+      <h2>Por tipo de página</h2>
+      <p class="field-help">Considera as 100 páginas mais vistas do período.</p>
+      <ul class="audience-kinds">
+        <% const groupTotal = Math.max(1, grouped.reduce((s, g) => s + g.views, 0)); grouped.forEach(g => { %>
+          <li>
+            <div class="kind-row"><span><%= g.label %></span><span><strong><%= nf(g.views) %></strong> · <%= (g.views / groupTotal * 100).toLocaleString('pt-BR', { maximumFractionDigits: 0 }) %>%</span></div>
+            <progress max="<%= groupTotal %>" value="<%= g.views %>" aria-label="<%= g.label %>: <%= nf(g.views) %> visualizações"></progress>
+          </li>
+        <% }) %>
+      </ul>
+    </section>
+
+    <section class="form-card audience-card">
+      <h2>Mais acessadas</h2>
+      <p class="field-help">As 10 páginas com mais visualizações. Sem parâmetros de URL nem termos pesquisados.</p>
+      <ol class="audience-top">
+        <% pages.slice(0, 10).forEach((page, i) => { %>
+          <li>
+            <span class="rank"><%= i + 1 %></span>
+            <div class="page-info">
+              <a href="<%= page.path %>" target="_blank" rel="noopener"><%= page.title || (page.path === '/' ? 'Página inicial' : page.path) %></a>
+              <small><%= page.kind %><% if(page.title){ %> · <%= page.path %><% } %></small>
+              <progress max="<%= maxPage %>" value="<%= page.views %>" aria-hidden="true"></progress>
+            </div>
+            <span class="views"><%= nf(page.views) %></span>
+          </li>
+        <% }) %>
+      </ol>
+    </section>
+  </div>
+
+  <% if(pages.length > 10){ %>
+  <section class="form-card audience-card">
+    <h2>Todas as páginas</h2>
+    <p class="field-help">Até 100 páginas, da mais para a menos acessada.</p>
+    <details class="audience-details">
+      <summary>Mostrar a lista completa (<%= pages.length %>)</summary>
+      <div class="table-wrap audience-scroll tall">
+        <table class="audience-table">
+          <thead><tr><th scope="col" class="num">#</th><th scope="col">Página</th><th scope="col">Tipo</th><th scope="col" class="num">Visualizações</th><th scope="col" class="num">%</th></tr></thead>
+          <tbody>
+            <% pages.forEach((page, i) => { %>
+              <tr>
+                <td class="num"><%= i + 1 %></td>
+                <td><a href="<%= page.path %>" target="_blank" rel="noopener"><%= page.title || (page.path === '/' ? 'Página inicial' : page.path) %></a><% if(page.title){ %><small class="path"><%= page.path %></small><% } %></td>
+                <td><%= page.kind %></td>
+                <td class="num"><%= nf(page.views) %></td>
+                <td class="num"><%= (page.views / total * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) %>%</td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+  <% } %>
+
+  <% } %>
+</main>
+<%- include('footer') %>
