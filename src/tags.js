@@ -3,7 +3,7 @@ import {transaction} from './postgres.js';
 export const normalizeTag=value=>String(value||'').trim().replace(/\s+/g,' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('pt-BR');
 export function tagNames(value){
   const entries=Array.isArray(value)?value:String(value||'').split(',');const seen=new Set();
-  return entries.map(v=>String(v).trim().replace(/\s+/g,' ')).filter(name=>{const key=normalizeTag(name);if(!key||name.length>50||!slugify(name)||!/^[\p{L}\p{N} \-]+$/u.test(name)||['noticias','giro63','g1','agencia brasil','agencia tocantins'].includes(key)||seen.has(key))return false;seen.add(key);return true;}).slice(0,5);
+  return entries.map(v=>String(v).trim().replace(/\s+/g,' ')).filter(name=>{const key=normalizeTag(name);if(!key||name.length>50||!slugify(name)||!/^[\p{L}\p{N} \-]+$/u.test(name)||['noticias','giro63','g1','agencia brasil','agencia tocantins','ebc','tv brasil','radio nacional','reuters','afp'].includes(key)||seen.has(key))return false;seen.add(key);return true;}).slice(0,5);
 }
 export async function assignTags(db,id,names){
   for(const name of tagNames(names)){
