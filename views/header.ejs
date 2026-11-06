@@ -15,7 +15,7 @@
 <% if(path==='/admin/login'){ %><link rel="stylesheet" href="/login.css"><script src="/login.js" defer></script><% } %>
 <% if(path.startsWith('/admin/publicidade')&&user){ %><link rel="stylesheet" href="/campaigns.css"><script src="/campaigns.js" defer></script><% } %>
 <% if(!path.startsWith('/admin')||path.endsWith('/preview')){ %><link rel="stylesheet" href="/reader.css"><script src="/reader.js" defer></script><% } %>
-<link rel="stylesheet" href="/portal.css"><script src="/portal.js" defer></script><script src="/forms.js" defer></script>
+<% if(path==='/admin/automacao'){ %><link rel="stylesheet" href="/automation.css"><% } %><link rel="stylesheet" href="/portal.css"><script src="/portal.js" defer></script><script src="/forms.js" defer></script>
 </head>
 <body class="<%= path.startsWith('/admin') ? 'admin-body' : '' %><%= path==='/admin/login'?' login-page':'' %>">
 <a class="skip-link" href="#main">Pular para o conteúdo</a>

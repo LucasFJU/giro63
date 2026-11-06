@@ -64,7 +64,18 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
   }finally{await db.prepare('DELETE FROM automation_lock WHERE id=? AND owner=?').run('runner',owner);}
 }
 export function mountAutomation(app,{db,requireUser,editor,checkCsrf}){
-  app.get('/admin/automacao',requireUser,editor,async(req,res)=>res.render('automation',{title:'Automação editorial',error:'',configured:!!process.env.GEMINI_API_KEY,model:process.env.GEMINI_MODEL||'gemini-3.7-flash',sources:await db.prepare('SELECT * FROM automation_sources ORDER BY name').all(),items:await db.prepare('SELECT i.*,s.name AS source_name FROM automation_items i JOIN automation_sources s ON s.id=i.source_id ORDER BY i.updated_at DESC LIMIT 100').all(),events:await db.prepare('SELECT * FROM automation_events ORDER BY created_at DESC LIMIT 20').all(),daily:await db.prepare('SELECT * FROM automation_daily WHERE day=?').get(dayInSaoPaulo())||{calls:0,published:0,national:0,input_tokens:0,output_tokens:0}}));
+  app.get('/admin/automacao',requireUser,editor,async(req,res)=>{
+    const filter=['pending','queued','published','discarded','all'].includes(req.query.status)?req.query.status:'pending';
+    const q=String(req.query.q||'').trim().slice(0,100),sourceFilter=String(req.query.source||'').slice(0,100),conditions=[],params=[];
+    if(filter==='pending')conditions.push("i.state IN ('review','failed')");else if(filter==='queued')conditions.push("i.state IN ('queued','processing')");else if(filter!=='all'){conditions.push('i.state=?');params.push(filter);}
+    if(q){conditions.push("(normalize_search(i.title) LIKE normalize_search(?) ESCAPE '!' OR normalize_search(s.name) LIKE normalize_search(?) ESCAPE '!')");const term='%'+q.replace(/[!%_]/g,'!$&')+'%';params.push(term,term);}
+    if(sourceFilter){conditions.push('i.source_id=?');params.push(sourceFilter);}
+    const where=conditions.length?conditions.join(' AND '):'1=1',join='FROM automation_items i JOIN automation_sources s ON s.id=i.source_id';
+    const total=(await db.prepare('SELECT count(*) AS n '+join+' WHERE '+where).get(...params)).n,page=Math.min(Math.max(1,Number.parseInt(req.query.page)||1),Math.max(1,Math.ceil(total/15)));
+    const counts=Object.fromEntries((await db.prepare('SELECT state,count(*) AS n FROM automation_items GROUP BY state').all()).map(x=>[x.state,Number(x.n)]));
+    const queueLink=(status=filter,n=1)=>{const query=new URLSearchParams({status});if(q)query.set('q',q);if(sourceFilter)query.set('source',sourceFilter);if(n>1)query.set('page',String(n));return '/admin/automacao?'+query.toString()+'#automation-queue';};
+    res.render('automation',{title:'Automação editorial',error:'',configured:!!process.env.GEMINI_API_KEY,model:process.env.GEMINI_MODEL||'gemini-3.7-flash',sources:await db.prepare('SELECT * FROM automation_sources ORDER BY name').all(),items:await db.prepare('SELECT i.*,s.name AS source_name '+join+' WHERE '+where+' ORDER BY i.updated_at DESC,i.id LIMIT 15 OFFSET ?').all(...params,(page-1)*15),events:await db.prepare('SELECT * FROM automation_events ORDER BY created_at DESC LIMIT 20').all(),daily:await db.prepare('SELECT * FROM automation_daily WHERE day=?').get(dayInSaoPaulo())||{calls:0,published:0,national:0,input_tokens:0,output_tokens:0},filter,q,sourceFilter,total,page,pages:Math.ceil(total/15),counts,queueLink});
+  });
   app.post('/admin/automacao/config',requireUser,editor,checkCsrf,async(req,res)=>{await transaction(db,async()=>{await db.prepare("UPDATE settings SET value=? WHERE key='automation_paused'").run(req.body.enabled==='on'?'0':'1');await db.prepare("UPDATE settings SET value=? WHERE key='automation_publish'").run(req.body.publish==='on'?'1':'0');});res.redirect('/admin/automacao');});
   app.post('/admin/automacao/fontes/:id',requireUser,editor,checkCsrf,async(req,res)=>{
     const source=await db.prepare('SELECT * FROM automation_sources WHERE id=?').get(req.params.id);if(!source)return res.sendStatus(404);
