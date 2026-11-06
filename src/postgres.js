@@ -7,7 +7,7 @@ export function postgresSql(input) {
   if (/^INSERT OR IGNORE INTO /i.test(sql)) sql=sql.replace(/^INSERT OR IGNORE INTO /i,'INSERT INTO ')+' ON CONFLICT DO NOTHING';
   if (/^INSERT OR REPLACE INTO sessions/i.test(sql)) sql=sql.replace(/^INSERT OR REPLACE INTO /i,'INSERT INTO ')+' ON CONFLICT(sid) DO UPDATE SET data=excluded.data,expires=excluded.expires';
   sql=sql.replace(/SET (views|impressions|clicks)=\1\+1/g,(_,column)=>`SET ${column}=${/INTO\s+(\w+)/i.exec(sql)?.[1]}.${column}+1`);
-  const tables='tags|article_tags|automation_sources|automation_items|automation_daily|automation_lock|automation_events|users|articles|ads|settings|editorial_categories|sessions|article_daily_reads|article_read_windows|ad_rotation|ad_deliveries|ad_daily|audience_daily|audience_deliveries|login_attempts';
+  const tables='article_image_suggestions|tags|article_tags|automation_sources|automation_items|automation_daily|automation_lock|automation_events|users|articles|ads|settings|editorial_categories|sessions|article_daily_reads|article_read_windows|ad_rotation|ad_deliveries|ad_daily|audience_daily|audience_deliveries|login_attempts';
   sql=sql.replace(new RegExp(`\\b(FROM|JOIN|INTO|UPDATE)\\s+(${tables})\\b`,'gi'),(_,action,table)=>`${action} giro63.${table}`);
   sql=sql.replace(/\bnormalize_search\(/g,'giro63.normalize_search(');
   // Do not replace question marks inside string literals or quoted identifiers.

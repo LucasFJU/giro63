@@ -1,0 +1,13 @@
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS photo_photographer TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS photo_source TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS photo_source_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS photo_license TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS photo_caption TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS photo_cover TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS photo_thumb TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS photo_share TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS photo_x INTEGER NOT NULL DEFAULT 50;
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS photo_y INTEGER NOT NULL DEFAULT 50;
+CREATE TABLE IF NOT EXISTS giro63.article_image_suggestions(id TEXT PRIMARY KEY,article_id BIGINT NOT NULL REFERENCES giro63.articles(id),image_url TEXT NOT NULL,source_page TEXT NOT NULL,source TEXT NOT NULL DEFAULT '',photographer TEXT NOT NULL DEFAULT '',caption TEXT NOT NULL DEFAULT '',alt TEXT NOT NULL DEFAULT '',license TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),created_at TEXT NOT NULL,reviewed_at TEXT,reviewed_by BIGINT REFERENCES giro63.users(id),UNIQUE(article_id,image_url)); CREATE INDEX IF NOT EXISTS image_suggestion_article ON giro63.article_image_suggestions(article_id,status);
+ALTER TABLE giro63.article_image_suggestions ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON giro63.article_image_suggestions FROM PUBLIC,anon,authenticated;

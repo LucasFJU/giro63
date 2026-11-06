@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
+import {initializeImages} from './image-schema.js';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
@@ -35,6 +36,7 @@ export function openDatabase(directory) {
     CREATE INDEX IF NOT EXISTS article_read_windows_expiry ON article_read_windows(expires_at);
   `);
   if(!db.prepare('PRAGMA table_info(articles)').all().some(c=>c.name==='cover_alt'))db.exec("ALTER TABLE articles ADD COLUMN cover_alt TEXT NOT NULL DEFAULT ''");
+  initializeImages(db);
   const adColumns=new Set(db.prepare('PRAGMA table_info(ads)').all().map(c=>c.name));
   for(const [name,type] of [['advertiser',"TEXT NOT NULL DEFAULT ''"],['starts_at','TEXT'],['ends_at','TEXT'],['archived','INTEGER NOT NULL DEFAULT 0']])if(!adColumns.has(name))db.exec(`ALTER TABLE ads ADD COLUMN ${name} ${type}`);
   db.exec(`CREATE TABLE IF NOT EXISTS ad_rotation(position TEXT PRIMARY KEY,last_id INTEGER NOT NULL);
