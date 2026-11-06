@@ -72,6 +72,7 @@ export async function mountPortal(app,{db,requireUser,editor,checkCsrf,flash}){
         }
         if(view==='login'){add('email');add('password');}
         if(view==='ad-edit'){const a=values.item;if(!a.name)add('name');if(!a.alt)add('alt');if(!['top','middle','sidebar'].includes(a.position))add('position');if(/endereço|HTTP/i.test(values.error))add('link');if(/término|início|data/i.test(values.error)){add('starts_at');add('ends_at');}if(/imagem|arquivo|MB|megapixel/i.test(values.error))add('image');}
+        if(view==='edit'&&/sugestão|aprovar|recorte|HTTPS|imagem/i.test(values.error)){for(const key of ['photo_photographer','photo_source','photo_source_url','photo_license','cover_alt'])if(!req.body[key])add(key);if(/recorte/.test(values.error)){add('photo_x');add('photo_y');}}
         if(view==='settings'){if(!String(req.body.name||'').trim())add('name');if(req.body.email&&!/^\S+@\S+\.\S+$/.test(req.body.email))add('email');if(req.body.instagram)add('instagram');}
         if(view==='team'){for(const name of ['name','email','password','role'])add(name);}
         if(view==='categories')add('name');
@@ -83,7 +84,7 @@ export async function mountPortal(app,{db,requireUser,editor,checkCsrf,flash}){
       if(view==='legal')description=values.legalKey==='privacy'?'Como o Giro63 utiliza dados, cookies, estatísticas e canais de privacidade.':'Regras de uso, direitos autorais, publicidade e conteúdo editorial do Giro63.';
       const noindex=s.indexing!=='1'||!s.public_url||req.path.startsWith('/admin')||req.path==='/busca'||res.statusCode>=400||!!values.article?.demo||(view==='legal'&&!legalReady(s,values.legalKey));
       if(noindex)res.set('X-Robots-Tag','noindex, nofollow');
-      const image=values.article?.cover&&values.editorialImage?values.editorialImage(values.article.cover).src:'/images/og-giro63.png';
+      const image=values.article?.photo_share||(values.article?.cover&&values.editorialImage?values.editorialImage(values.article.cover).src:'/images/og-giro63.png');
       const metadata={url:base+canonical,image:new URL(image,base).href,type:view==='article'?'article':'website'};
       let token='';const measurable=req.method==='GET'&&!values.user&&res.statusCode===200&&['home','listing','article','institutional','legal'].includes(view)&&req.path!=='/busca';
       if(measurable){await cleanup();token=randomBytes(24).toString('hex');await db.prepare('INSERT INTO audience_deliveries(token_hash,path,expires_at) VALUES(?,?,?)').run(tokenHash(token),req.path,Date.now()+300000);res.set('Cache-Control','private, no-store');}

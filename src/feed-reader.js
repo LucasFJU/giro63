@@ -12,17 +12,18 @@ export function publicAddress(address){
   // Pin to public IPv4. No mapped IPv6, private, metadata or loopback targets.
   return false;
 }
-export async function fetchFeed(url,hosts,redirects=0){
+export async function fetchApprovedBuffer(url,hosts,{maxBytes=1024*1024,accept='text/html,application/xml,text/xml'}={},redirects=0){
   const u=approvedUrl(url,hosts),addresses=await Promise.race([lookup(u.hostname,{all:true}),new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('Consulta DNS excedeu o prazo.')),8000);timer.unref();})]);const address=addresses.find(a=>a.family===4&&publicAddress(a.address));if(!address||addresses.some(a=>a.family===4&&!publicAddress(a.address)))throw Error('Destino de rede não permitido.');
   const result=await new Promise((resolve,reject)=>{
-    const request=https.get(u,{signal:AbortSignal.timeout(8000),headers:{'User-Agent':'Giro63 RSS/1.0','Accept':'application/rss+xml, application/atom+xml, application/xml, text/xml'},lookup:(_host,options,cb)=>cb(null,options.all?[address]:address.address,address.family)},res=>{
+    const request=https.get(u,{signal:AbortSignal.timeout(8000),headers:{'User-Agent':'Giro63 RSS/1.0','Accept':accept},lookup:(_host,options,cb)=>cb(null,options.all?[address]:address.address,address.family)},res=>{
       if([301,302,303,307,308].includes(res.statusCode)){res.resume();return resolve({redirect:res.headers.location});}
       if(res.statusCode!==200){res.resume();return reject(Error('Feed indisponível (HTTP '+res.statusCode+').'));}
-      let length=0;const chunks=[];res.on('data',chunk=>{length+=chunk.length;if(length>1024*1024){request.destroy(Error('Feed excede 1 MB.'));return;}chunks.push(chunk);});res.on('end',()=>resolve({text:Buffer.concat(chunks).toString('utf8')}));res.on('error',reject);
+      let length=0;const chunks=[];res.on('data',chunk=>{length+=chunk.length;if(length>maxBytes){request.destroy(Error('Arquivo excede o limite permitido.'));return;}chunks.push(chunk);});res.on('end',()=>resolve({bytes:Buffer.concat(chunks)}));res.on('error',reject);
     });request.setTimeout(8000,()=>request.destroy(Error('Tempo de consulta excedido.')));request.on('error',reject);
   });
-  if(result.redirect){if(redirects>=2)throw Error('Redirecionamentos em excesso.');return fetchFeed(new URL(result.redirect,u).href,hosts,redirects+1);}return result.text;
+  if(result.redirect){if(redirects>=2)throw Error('Redirecionamentos em excesso.');return fetchApprovedBuffer(new URL(result.redirect,u).href,hosts,{maxBytes,accept},redirects+1);}return result.bytes;
 }
+export async function fetchFeed(url,hosts){return (await fetchApprovedBuffer(url,hosts,{accept:'application/rss+xml,application/atom+xml,application/xml,text/xml'})).toString('utf8');}
 export function parseFeed(xml,hosts,now=Date.now()){
   if(/<!DOCTYPE|<!ENTITY/i.test(xml)||XMLValidator.validate(xml)!==true)throw Error('XML inválido ou não permitido.');
   const parsed=new XMLParser({ignoreAttributes:false,processEntities:true}).parse(xml),raw=parsed.rss?.channel?.item??parsed.feed?.entry;if(!raw)throw Error('O endereço não contém um feed RSS ou Atom.');

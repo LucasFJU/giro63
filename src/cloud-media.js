@@ -34,6 +34,9 @@ export function cloudMedia({url=process.env.SUPABASE_URL,key=process.env.SUPABAS
         return publicUrl(prefix+'.webp');
       }catch(error){if(uploaded.length)await storage.remove(uploaded);throw error;}
     },
+    async saveVariant(buffer){
+      const name='crops/'+randomBytes(20).toString('hex')+'.webp';const {error}=await storage.upload(name,buffer,{contentType:'image/webp',cacheControl:'31536000',upsert:false});if(error)throw Error('Não foi possível armazenar os recortes da imagem.');return publicUrl(name);
+    },
     async generate(){}
   };
 }

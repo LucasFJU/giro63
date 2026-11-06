@@ -4,6 +4,7 @@ import {mountAutomation,reservePublication} from './automation.js';
 import { mountPortal } from './portal.js';
 import { openPostgres, transaction } from './postgres.js';
 import { cloudMedia } from './cloud-media.js';
+import {photoValues,photoFields,cropImage,discoverImage,addImageSuggestion,readSuggestedImage,checkImageApproval} from './article-images.js';
 import express from 'express';
 import { popularArticles,recordArticleRead,publicCities,homepageSections,readingMinutes,shortPublication } from './reader-experience.js';
 import { editorialMedia } from './editorial-media.js';
@@ -21,10 +22,10 @@ import { SQLiteSessionStore, csrf, checkCsrf, cleanBody, safeUrl } from './secur
 
 export const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const labels = {draft:'Rascunho',review:'Em revisão',published:'Publicado'};
-export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(root,'data'),uploadDir=path.join(root,'public','uploads'),seed=false,database=null}={}) {
+export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(root,'data'),uploadDir=path.join(root,'public','uploads'),seed=false,database=null,suggestedImageReader=readSuggestedImage,discoverArticleImage=discoverImage}={}) {
   const cloud=!!process.env.DATABASE_URL;
   const uploadLimitMb=cloud?4:8;
-  const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:uploadLimitMb*1024*1024,files:1,fields:25,fieldSize:250000}}).single('image');
+  const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:uploadLimitMb*1024*1024,files:1,fields:45,fieldSize:250000}}).single('image');
   if(process.env.VERCEL&&!cloud)throw Error('DATABASE_URL obrigatória na Vercel.');
   if(!cloud)mkdirSync(uploadDir,{recursive:true});
   const db=database||(cloud?openPostgres(process.env.DATABASE_URL):openDatabase(dataDir)); if(seed&&!cloud)seedDemo(db);
@@ -52,7 +53,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
     res.locals.user=req.session.userId?(await db.prepare('SELECT id,name,email,role FROM users WHERE id=? AND active=1').get(req.session.userId)):null;
     res.locals.path=req.path;res.locals.flash=req.session.flash||'';delete req.session.flash;
     res.locals.title='Notícias do Tocantins';res.locals.description='Giro63: notícias, cidades, cultura e perspectivas do Tocantins.';
-    res.locals.articleTags=[];res.locals.allTags=await db.prepare('SELECT * FROM tags ORDER BY name').all();res.locals.tagFilter=String(req.query.tag||'');res.locals.metadata=null;res.locals.ads=[];
+    res.locals.articleTags=[];res.locals.imageSuggestions=[];res.locals.allTags=await db.prepare('SELECT * FROM tags ORDER BY name').all();res.locals.tagFilter=String(req.query.tag||'');res.locals.metadata=null;res.locals.ads=[];
     res.locals.editorialImage=media.get;res.locals.readingMinutes=readingMinutes;res.locals.shortPublication=shortPublication;res.locals.mostRead=(await popularArticles(db));
     next();
   });
@@ -125,11 +126,22 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
   const findEditable=async (req,res)=>{
     const a=(await db.prepare('SELECT * FROM articles WHERE id=?').get(Number(req.params.id)));
     if(!a){res.status(404).render('error',{title:'Matéria não encontrada',message:'Confira o endereço e volte ao painel.'});return null;}
-    if(res.locals.user.role!=='editor'&&(a.author_id!==res.locals.user.id||a.status==='published')){res.status(403).render('error',{title:'Acesso restrito',message:'Autores podem editar apenas suas próprias matérias ainda não publicadas.'});return null;}a.tags=(await tagsFor(db,a.id)).map(t=>t.name).join(', ');res.locals.articleTags=await tagsFor(db,a.id);return a;
+    if(res.locals.user.role!=='editor'&&(a.author_id!==res.locals.user.id||a.status==='published')){res.status(403).render('error',{title:'Acesso restrito',message:'Autores podem editar apenas suas próprias matérias ainda não publicadas.'});return null;}a.tags=(await tagsFor(db,a.id)).map(t=>t.name).join(', ');res.locals.articleTags=await tagsFor(db,a.id);res.locals.imageSuggestions=await db.prepare("SELECT * FROM article_image_suggestions WHERE article_id=? AND status='pending' ORDER BY created_at DESC").all(a.id);return a;
   };
   app.get('/admin/noticias/nova',(req,res)=>res.render('edit',{title:'Nova matéria',article:blankArticle(),error:''}));
   app.get('/admin/noticias/:id',async (req,res)=>{const article=(await findEditable(req,res));if(article)res.render('edit',{title:'Editar matéria',article,error:''});});
   app.get('/admin/noticias/:id/preview',async (req,res)=>{const article=(await findEditable(req,res));if(article)res.render('article',{title:`Prévia: ${article.title}`,article,related:[],preview:true});});
+  app.post('/admin/noticias/:id/imagem/sugerir',editor,checkCsrf,async(req,res)=>{
+    const article=await findEditable(req,res);if(!article)return;
+    const origin=await db.prepare('SELECT i.url FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.article_id=? AND s.approved=1').get(article.id);
+    try{if(!origin)throw Error();const candidate=await discoverArticleImage(origin.url);await addImageSuggestion(db,article.id,candidate);flash(req,candidate?'Imagem sugerida. Confira direitos, contexto e dados antes de aprovar.':'A fonte não forneceu uma imagem elegível. A capa atual foi preservada.');}catch{flash(req,'Não foi possível obter uma sugestão da fonte aprovada. A capa atual foi preservada.');}res.redirect('/admin/noticias/'+article.id+'#photo-management');
+  });
+  app.get('/admin/noticias/:id/imagem/:suggestion',async(req,res)=>{
+    const article=await findEditable(req,res);if(!article)return;
+    const candidate=await db.prepare("SELECT * FROM article_image_suggestions WHERE id=? AND article_id=? AND status='pending'").get(req.params.suggestion,article.id);if(!candidate)return res.sendStatus(404);
+    try{const buffer=await suggestedImageReader(candidate);res.set('Cache-Control','private, no-store').type('webp').send(await sharp(buffer).rotate().resize({width:720,withoutEnlargement:true}).webp().toBuffer());}catch{res.sendStatus(502);}
+  });
+  app.post('/admin/noticias/:id/imagem/:suggestion/rejeitar',editor,checkCsrf,async(req,res)=>{const article=await findEditable(req,res);if(!article)return;await db.prepare("UPDATE article_image_suggestions SET status='rejected',reviewed_by=?,reviewed_at=? WHERE id=? AND article_id=? AND status='pending'").run(res.locals.user.id,new Date().toISOString(),req.params.suggestion,article.id);flash(req,'Sugestão descartada. A capa atual foi preservada.');res.redirect('/admin/noticias/'+article.id+'#photo-management');});
   async function saveImage(file) {
     if(cloud)return media.save(file);
     if(!file)return null;
@@ -139,7 +151,14 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
     await sharp(file.buffer,{limitInputPixels:25e6}).rotate().resize({width:1920,height:1920,fit:'inside',withoutEnlargement:true}).webp({quality:85}).toFile(path.join(uploadDir,filename));
     return '/uploads/'+filename;
   }
-  const articleUpload=(req,res,next)=>{upload(req,res,async err=>{if(!err)return next();const old=req.params.id?(await findEditable(req,res)):null;if(req.params.id&&!old)return;const fields=Object.fromEntries(Object.entries(req.body||{}).filter(([key])=>['title','summary','body','category','tags','city','cover_alt','credit','sources','byline','feedback'].includes(key)));if(fields.body)fields.body=cleanBody(fields.body);res.status(400).render('edit',{title:'Revise a imagem',article:{...blankArticle(),...old,...fields},error:'Envie uma imagem de até 8 MB. Confira os campos e selecione o arquivo novamente.'});});};
+  async function imageBuffer(source){
+    if(cloud&&source.startsWith(media.publicOrigin+'/storage/v1/object/public/'+(process.env.SUPABASE_STORAGE_BUCKET||'giro63-media')+'/editorial/')){
+      const response=await fetch(source,{redirect:'error',signal:AbortSignal.timeout(8000)});if(!response.ok)throw Error('Não foi possível ler a imagem atual.');const chunks=[];let length=0;for await(const chunk of response.body){length+=chunk.length;if(length>8*1024*1024)throw Error('Imagem excede o limite.');chunks.push(chunk);}return Buffer.concat(chunks);
+    }
+    const base=source.startsWith('/images/')?path.join(root,'public','images'):source.startsWith('/uploads/')?uploadDir:null;if(!base)throw Error('Imagem atual fora do armazenamento aprovado.');const file=path.resolve(base,source.replace(/^\/(images|uploads)\//,''));if(!file.startsWith(path.resolve(base)+path.sep))throw Error('Imagem inválida.');return readFileSync(file);
+  }
+  async function saveCrop(buffer){if(cloud)return media.saveVariant(buffer);const directory=path.join(uploadDir,'crops');mkdirSync(directory,{recursive:true});const name=randomBytes(20).toString('hex')+'.webp';writeFileSync(path.join(directory,name),buffer);return '/uploads/crops/'+name;}
+  const articleUpload=(req,res,next)=>{upload(req,res,async err=>{if(!err)return next();const old=req.params.id?(await findEditable(req,res)):null;if(req.params.id&&!old)return;const fields=Object.fromEntries(Object.entries(req.body||{}).filter(([key])=>['title','summary','body','category','tags','city','cover_alt','credit','sources','byline','feedback',...photoFields].includes(key)));if(fields.body)fields.body=cleanBody(fields.body);res.status(400).render('edit',{title:'Revise a imagem',article:{...blankArticle(),...old,...fields},error:'Envie uma imagem de até 8 MB. Confira os campos e selecione o arquivo novamente.'});});};
   async function saveArticle(req,res,next) {
     const old=req.params.id?(await findEditable(req,res)):null;if(req.params.id&&!old)return;
     const isEditor=res.locals.user.role==='editor';
@@ -147,13 +166,26 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
     const allowed=isEditor?['draft','review','published']:['draft','review'];
     if(!allowed.includes(desired))return res.status(403).render('error',{title:'Ação não permitida',message:'Apenas editores podem publicar matérias.'});
     const a={...blankArticle(),...old,tags:String(req.body.tags||'').slice(0,500),title:String(req.body.title||'').trim().slice(0,180),summary:String(req.body.summary||'').trim().slice(0,500),body:cleanBody(req.body.body),category:String(req.body.category||''),city:String(req.body.city||'').trim().slice(0,100),cover_alt:String(req.body.cover_alt??old?.cover_alt??'').trim().slice(0,250),credit:String(req.body.credit||'').trim().slice(0,250),sources:String(req.body.sources||'').trim().slice(0,3000),byline:isEditor?String(req.body.byline||'').trim().slice(0,100):res.locals.user.name,demo:req.body.demo==='on'?1:0,status:desired,featured:isEditor?Math.max(0,Math.min(4,Number.parseInt(req.body.featured)||0)):(old?.featured||0),urgent:isEditor&&req.body.urgent==='on'?1:(isEditor?0:(old?.urgent||0)),feedback:isEditor?String(req.body.feedback||'').slice(0,2000):(old?.feedback||'')};
+    let photo;try{photo=photoValues(req.body,old||{});Object.assign(a,photo);}catch(error){Object.assign(a,Object.fromEntries(photoFields.map(key=>[key,String(req.body[key]??old?.[key]??'')])));return res.status(400).render('edit',{title:'Revise a imagem',article:a,error:'Confira o endereço HTTPS da fonte e os valores do recorte (0, 25, 50, 75 ou 100).'});}
     if(!a.title||!a.summary||!a.body.replace(/<[^>]*>/g,'').trim()||!res.locals.categories.some(c=>c[0]===a.category))return res.status(400).render('edit',{title:'Revise a matéria',article:a,error:'Preencha título, resumo, conteúdo e uma editoria válida.'});
     try {
+      let selected=null,file=req.file;
+      if(req.body.image_suggestion){
+        if(!isEditor)return res.status(403).render('error',{title:'Aprovação restrita',message:'Apenas editores podem aprovar imagens sugeridas.'});
+        if(req.file)throw Error('Escolha uma sugestão ou um novo arquivo, não ambos.');
+        selected=await db.prepare("SELECT * FROM article_image_suggestions WHERE id=? AND article_id=? AND status='pending'").get(String(req.body.image_suggestion),old?.id||0);if(!selected)throw Error('Sugestão indisponível. Reabra a matéria.');
+        checkImageApproval(req.body,photo,a.cover_alt);file={buffer:await suggestedImageReader(selected)};
+      }
+      if(photo.photo_photographer||photo.photo_source)a.credit=[photo.photo_photographer,photo.photo_source].filter(Boolean).join(' / ');
       if(req.file&&!a.credit)return res.status(400).render('edit',{title:'Crédito obrigatório',article:a,error:'Informe o crédito da imagem antes de enviar.'});
-      const image=await saveImage(req.file);if(image)a.cover=image;
+      const image=await saveImage(file);if(image)a.cover=image;
       if(!a.cover)a.cover='/images/cerrado.jpg';
       if(desired==='published'&&!a.demo&&(!a.sources||!a.credit))return res.status(400).render('edit',{title:'Revise a publicação',article:a,error:'Matérias reais precisam de fontes e crédito da imagem para publicação. Reenvie a imagem se ela ainda não estava salva.'});
       await media.generate(a.cover);
+      if(file||a.photo_x!==(old?.photo_x??50)||a.photo_y!==(old?.photo_y??50)||!old?.photo_share){
+        const bytes=file?.buffer||await imageBuffer(a.cover);
+        for(const [key,w,h] of [['photo_cover',1200,675],['photo_thumb',640,388],['photo_share',1200,630]])a[key]=await saveCrop(await cropImage(bytes,w,h,a.photo_x,a.photo_y));
+      }
       const now=new Date().toISOString();
       let slug=old?.slug||slugify(a.title)||'materia';
       if(!old){let n=1;const base=slug;while((await db.prepare('SELECT id FROM articles WHERE slug=?').get(slug)))slug=base+'-'+(++n);}
@@ -165,10 +197,12 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
         if(old)(await db.prepare('UPDATE articles SET title=?,summary=?,body=?,category=?,city=?,byline=?,cover=?,cover_alt=?,credit=?,sources=?,status=?,featured=?,urgent=?,demo=?,feedback=?,updated_at=?,published_at=? WHERE id=?').run(...values,old.id));
         else (await db.prepare('INSERT INTO articles(title,summary,body,category,city,byline,cover,cover_alt,credit,sources,status,featured,urgent,demo,feedback,updated_at,published_at,slug,author_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(...values,slug,res.locals.user.id,now));
         const taggedId=old?.id||(await db.prepare('SELECT id FROM articles WHERE slug=?').get(slug)).id;await db.prepare('DELETE FROM article_tags WHERE article_id=?').run(taggedId);await assignTags(db,taggedId,a.tags);
+        await db.prepare('UPDATE articles SET photo_photographer=?,photo_source=?,photo_source_url=?,photo_license=?,photo_caption=?,photo_x=?,photo_y=?,photo_cover=?,photo_thumb=?,photo_share=? WHERE id=?').run(a.photo_photographer,a.photo_source,a.photo_source_url,a.photo_license,a.photo_caption,a.photo_x,a.photo_y,a.photo_cover||'',a.photo_thumb||'',a.photo_share||'',taggedId);
+        if(selected){const approved=await db.prepare("UPDATE article_image_suggestions SET status='approved',reviewed_by=?,reviewed_at=? WHERE id=? AND status='pending'").run(res.locals.user.id,now,selected.id);if(!approved.changes)throw Error('Sugestão já revisada por outro editor. Reabra a matéria.');}
       });
       const savedId=old?.id||(await db.prepare('SELECT id FROM articles WHERE slug=?').get(slug)).id;
       flash(req,desired==='published'?'Matéria publicada no portal.':desired==='review'?'Matéria enviada para revisão.':'Rascunho salvo.');res.redirect(desired==='draft'?'/admin/noticias/'+savedId:'/admin/materias');
-    }catch(e){if(/image|Input|format|JPG|pixels|unsupported|corrupt/i.test(e.message))return res.status(400).render('edit',{title:'Verifique a imagem',article:a,error:'Imagem inválida. Use JPG, PNG ou WebP estático de até 8 MB e 25 megapixels.'});next(e);}
+    }catch(e){if(/sugestão|sugestões|aprovar|recortes|armazenar|ler a imagem/i.test(e.message))return res.status(400).render('edit',{title:'Revise a imagem',article:{...a,cover:old?.cover||'',photo_cover:old?.photo_cover||'',photo_thumb:old?.photo_thumb||'',photo_share:old?.photo_share||''},error:e.message});if(/image|Input|format|JPG|pixels|unsupported|corrupt/i.test(e.message))return res.status(400).render('edit',{title:'Verifique a imagem',article:{...a,cover:old?.cover||''},error:'Imagem inválida. Use JPG, PNG ou WebP estático dentro dos limites informados.'});next(e);}
   }
   app.post('/admin/noticias',articleUpload,checkCsrf,saveArticle);
   app.post('/admin/noticias/:id',articleUpload,checkCsrf,saveArticle);

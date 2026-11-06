@@ -6,12 +6,12 @@
   <meta name="description" content="<%= description %>">
   <meta name="theme-color" content="#ED521A">
   <meta property="og:title" content="<%= title %> | <%= settings.name %>"><meta property="og:description" content="<%= description %>"><meta property="og:locale" content="pt_BR"><meta property="og:site_name" content="<%= settings.name %>">
-  <% if(metadata){ %><link rel="canonical" href="<%= metadata.url %>"><meta property="og:url" content="<%= metadata.url %>"><meta property="og:type" content="<%= metadata.type %>"><meta property="og:image" content="<%= metadata.image %>"><meta name="twitter:card" content="summary_large_image"><% } %>
+  <% if(metadata){ %><link rel="canonical" href="<%= metadata.url %>"><meta property="og:url" content="<%= metadata.url %>"><meta property="og:type" content="<%= metadata.type %>"><meta property="og:image" content="<%= metadata.image %>"><meta name="twitter:card" content="summary_large_image"><% if(typeof article!=='undefined'&&article.photo_share){ %><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630"><meta property="og:image:type" content="image/webp"><% } %><% if(typeof article!=='undefined'&&article.cover_alt){ %><meta property="og:image:alt" content="<%= article.cover_alt %>"><% } %><% } %>
   <% if(noindex){ %><meta name="robots" content="noindex,nofollow"><% } %>
   <link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" href="/icons/favicon-32.png" type="image/png" sizes="32x32"><link rel="icon" href="/icons/favicon-16.png" type="image/png" sizes="16x16"><link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180"><link rel="manifest" href="/site.webmanifest"><meta name="csrf-token" content="<%= csrf %>"><meta name="audience-token" content="<%= audienceToken %>"><meta name="form-errors" content="<%= JSON.stringify(fieldErrors||{}) %>">
   <link rel="preload" href="/fonts/inter-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/brand.css"><script src="/app.js" defer></script><script src="/ad-metrics.js" defer></script>
-<% if(path.startsWith('/admin')&&user&&!path.endsWith('/preview')){ %><link rel="stylesheet" href="/admin.css"><script src="/admin.js" defer></script><% } %>
+<% if(path.startsWith('/admin')&&user&&!path.endsWith('/preview')){ %><link rel="stylesheet" href="/admin.css"><script src="/admin.js" defer></script><script src="/article-images.js" defer></script><% } %>
 <% if(path==='/admin/login'){ %><link rel="stylesheet" href="/login.css"><script src="/login.js" defer></script><% } %>
 <% if(path.startsWith('/admin/publicidade')&&user){ %><link rel="stylesheet" href="/campaigns.css"><script src="/campaigns.js" defer></script><% } %>
 <% if(!path.startsWith('/admin')||path.endsWith('/preview')){ %><link rel="stylesheet" href="/reader.css"><script src="/reader.js" defer></script><% } %>
