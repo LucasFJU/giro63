@@ -76,7 +76,7 @@ export async function mountPortal(app,{db,requireUser,editor,checkCsrf,flash}){
         if(view==='team'){for(const name of ['name','email','password','role'])add(name);}
         if(view==='categories')add('name');
       }
-      let title=values.title,description=values.description,canonical=req.path;
+      let title=values.title,description=values.description,canonical=req.path; if(req.path.startsWith('/tag/'))description=values.heading+': notícias e informações do Giro63.';
       if(view==='home'){title='Notícias do Tocantins';description='Acompanhe notícias, cidades, política, economia e cultura do Tocantins no Giro63.';}
       if(view==='listing'){description=`${values.heading}: acompanhe as notícias, reportagens e informações do Giro63 sobre o Tocantins.`;if(values.page>1){title+=` — Página ${values.page}`;description+=` Página ${values.page}.`;canonical+='?page='+values.page;}}
       if(view==='institutional')description={sobre:'Conheça o Giro63, portal dedicado às notícias e histórias do Tocantins.',expediente:'Conheça os responsáveis e o expediente editorial do Giro63.',contato:'Fale com a redação do Giro63: sugestões de pauta, correções e atendimento.',anuncie:'Conheça os espaços de publicidade do Giro63 e fale com a equipe comercial.','politica-editorial':'Conheça os compromissos de apuração, transparência e correção do Giro63.'}[req.params.slug]||description;
@@ -98,6 +98,7 @@ export async function mountPortal(app,{db,requireUser,editor,checkCsrf,flash}){
     if(s.indexing!=='1')return res.type('application/xml').send('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>');
     const entries=['/','/ultimas',...['sobre','expediente','politica-editorial','contato','anuncie'].map(p=>'/pagina/'+p)];
     if(legalReady(s,'privacy'))entries.push('/pagina/privacidade');if(legalReady(s,'terms'))entries.push('/pagina/termos-de-uso');
+    const tags=await db.prepare("SELECT DISTINCT t.slug FROM tags t JOIN article_tags a ON a.tag_slug=t.slug JOIN articles n ON n.id=a.article_id WHERE n.status='published' AND n.demo=0").all();entries.push(...tags.map(t=>'/tag/'+t.slug));
     const articles=(await db.prepare("SELECT slug,category,city FROM articles WHERE status='published' AND demo=0 ORDER BY published_at DESC").all());
     for(const a of articles){entries.push('/noticia/'+a.slug,'/editoria/'+a.category);if(a.city.trim())entries.push('/cidade/'+slugify(a.city));}
     res.type('application/xml').send('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'+[...new Set(entries)].map(p=>'<url><loc>'+xml(s.public_url+p)+'</loc></url>').join('')+'</urlset>');
