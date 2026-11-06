@@ -124,13 +124,29 @@ export async function mountPortal(app,{db,requireUser,editor,checkCsrf,flash}){
     });res.sendStatus(recorded?204:403);
   });
   app.get('/admin/audiencia',requireUser,editor,async (req,res)=>{
-    (await cleanup());const today=dayInSaoPaulo(),defaultFrom=new Date(Date.parse(today+'T12:00:00Z')-29*86400000).toISOString().slice(0,10);
+    (await cleanup());
+    const decode=v=>{try{return decodeURIComponent(v);}catch{return v;}},DAY=86400000,at=day=>Date.parse(day+'T12:00:00Z'),iso=ms=>new Date(ms).toISOString().slice(0,10);
+    const today=dayInSaoPaulo(),defaultFrom=iso(at(today)-29*DAY);
     let from=String(req.query.from||defaultFrom),to=String(req.query.to||today),error='';
-    if(!validDay(from)||!validDay(to)||from>to||Date.parse(to)-Date.parse(from)>365*86400000){error='Escolha datas válidas e um período de até 366 dias.';from=defaultFrom;to=today;res.status(400);}
+    if(!validDay(from)||!validDay(to)||from>to||at(to)-at(from)>365*DAY){error='Escolha datas válidas e um período de até 366 dias.';from=defaultFrom;to=today;res.status(400);}
     const rows=(await db.prepare('SELECT day,SUM(views) views FROM audience_daily WHERE day BETWEEN ? AND ? GROUP BY day ORDER BY day').all(from,to));
     const pages=(await db.prepare('SELECT path,SUM(views) views FROM audience_daily WHERE day BETWEEN ? AND ? GROUP BY path ORDER BY views DESC,path LIMIT 100').all(from,to));
-    const days=[];for(let date=Date.parse(from+'T12:00:00Z');date<=Date.parse(to+'T12:00:00Z');date+=86400000){const day=new Date(date).toISOString().slice(0,10);days.push(rows.find(r=>r.day===day)||{day,views:0});}
-    res.render('audience',{title:'Audiência',from,to,error,days,pages,total:rows.reduce((sum,r)=>sum+r.views,0)});
+    const days=[];for(let t=at(from);t<=at(to);t+=DAY){const day=iso(t);days.push({day,views:Number(rows.find(r=>r.day===day)?.views)||0});}
+    const total=days.reduce((sum,d)=>sum+d.views,0),span=days.length;
+    // Período anterior, com a mesma duração, para a comparação.
+    const prevTo=iso(at(from)-DAY),prevFrom=iso(at(from)-span*DAY);
+    const previous=Number((await db.prepare('SELECT COALESCE(SUM(views),0) views FROM audience_daily WHERE day BETWEEN ? AND ?').get(prevFrom,prevTo))?.views)||0;
+    const best=days.reduce((a,d)=>d.views>a.views?d:a,{day:from,views:0});
+    // Títulos das matérias, para exibir texto legível no lugar do endereço.
+    const slugs=pages.filter(x=>x.path.startsWith('/noticia/')).map(x=>decode(x.path.slice(9)).replace(/\/$/,''));
+    const titles=new Map();
+    if(slugs.length)for(const a of (await db.prepare('SELECT slug,title FROM articles WHERE slug IN ('+slugs.map(()=>'?').join(',')+')').all(...slugs)))titles.set(a.slug,a.title);
+    const kind=path=>path==='/'?'Página inicial':path.startsWith('/noticia/')?'Matérias':path.startsWith('/editoria/')?'Editorias':path.startsWith('/tag/')?'Assuntos':path.startsWith('/cidade/')?'Cidades':'Outras páginas';
+    const groups=new Map();
+    const ranked=pages.map(x=>{const label=kind(x.path),title=label==='Matérias'?titles.get(decode(x.path.slice(9)).replace(/\/$/,'')):'';groups.set(label,(groups.get(label)||0)+Number(x.views));return {path:x.path,views:Number(x.views),kind:label,title:title||''};});
+    const grouped=[...groups].map(([label,views])=>({label,views})).sort((a,b)=>b.views-a.views);
+    const presets=[['Últimos 7 dias',6],['Últimos 30 dias',29],['Últimos 90 dias',89],['Últimos 12 meses',364]].map(([label,back])=>{const f=iso(at(today)-back*DAY);return {label,from:f,to:today,active:from===f&&to===today};});
+    res.render('audience',{title:'Audiência',from,to,today,error,days,pages:ranked,total,previous,hasPrevious:previous>0,best,average:total/Math.max(1,span),span,grouped,presets,previousRange:{from:prevFrom,to:prevTo}});
   });
   app.get('/admin/portal',requireUser,editor,(req,res)=>res.render('portal-settings',{title:'Busca e privacidade',error:'',fieldErrors:{}}));
   app.post('/admin/portal',requireUser,editor,checkCsrf,async (req,res)=>{
