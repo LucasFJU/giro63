@@ -139,7 +139,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
     await sharp(file.buffer,{limitInputPixels:25e6}).rotate().resize({width:1920,height:1920,fit:'inside',withoutEnlargement:true}).webp({quality:85}).toFile(path.join(uploadDir,filename));
     return '/uploads/'+filename;
   }
-  const articleUpload=(req,res,next)=>{upload(req,res,async err=>{if(!err)return next();const old=req.params.id?(await findEditable(req,res)):null;if(req.params.id&&!old)return;const fields=Object.fromEntries(Object.entries(req.body||{}).filter(([key])=>['title','summary','body','category','city','cover_alt','credit','sources','byline','feedback'].includes(key)));if(fields.body)fields.body=cleanBody(fields.body);res.status(400).render('edit',{title:'Revise a imagem',article:{...blankArticle(),...old,...fields},error:'Envie uma imagem de até 8 MB. Confira os campos e selecione o arquivo novamente.'});});};
+  const articleUpload=(req,res,next)=>{upload(req,res,async err=>{if(!err)return next();const old=req.params.id?(await findEditable(req,res)):null;if(req.params.id&&!old)return;const fields=Object.fromEntries(Object.entries(req.body||{}).filter(([key])=>['title','summary','body','category','tags','city','cover_alt','credit','sources','byline','feedback'].includes(key)));if(fields.body)fields.body=cleanBody(fields.body);res.status(400).render('edit',{title:'Revise a imagem',article:{...blankArticle(),...old,...fields},error:'Envie uma imagem de até 8 MB. Confira os campos e selecione o arquivo novamente.'});});};
   async function saveArticle(req,res,next) {
     const old=req.params.id?(await findEditable(req,res)):null;if(req.params.id&&!old)return;
     const isEditor=res.locals.user.role==='editor';
