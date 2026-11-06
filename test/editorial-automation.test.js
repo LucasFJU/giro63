@@ -55,3 +55,15 @@ test('painel de tags e automação exige editor; busca e página de tags preserv
   }
  }finally{db.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('validação rejeita números por substring, cidade parcial e citações inventadas; temas ampliados vão à revisão',()=>{
+ const base={title:'Obras',summary:'Resumo da obra.',paragraphs:['A obra segue em andamento.'],category:'cidades',city:'',tags:[],sensitive:false,alerts:[]};
+ const item={title:'Obras em Palmas',summary:'A prefeitura de Palmas investiu 15 milhões em obras.'};
+ assert.ok(validateGenerated({...base,paragraphs:['O investimento foi de 5 milhões.']},item,['cidades']).alerts.some(a=>/Número/.test(a)));
+ assert.ok(!validateGenerated({...base,paragraphs:['O investimento foi de 15 milhões.']},item,['cidades']).alerts.some(a=>/Número/.test(a)));
+ assert.equal(validateGenerated({...base,city:'Palma'},item,['cidades']).city,'');
+ assert.equal(validateGenerated({...base,city:'Palmas'},item,['cidades']).city,'Palmas');
+ assert.ok(validateGenerated({...base,paragraphs:['O prefeito disse: “vamos entregar”.']},item,['cidades']).alerts.some(a=>/Citação/.test(a)));
+ assert.equal(validateGenerated(base,{title:'Acidente na TO-050',summary:'Um acidente deixou feridos.'},['cidades']).sensitive,true);
+ assert.equal(validateGenerated(base,item,['cidades']).sensitive,false);
+});
