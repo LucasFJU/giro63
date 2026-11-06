@@ -21,7 +21,8 @@ export async function ingest(db,source,entries){
     const candidates=await db.prepare('SELECT title,fingerprint FROM automation_items WHERE original_at>=?').all(new Date(Date.now()-48*3600000).toISOString());
     const words=new Set(slugify(entry.title).split('-').filter(w=>w.length>3));
     const duplicate=candidates.some(x=>{const other=new Set(slugify(x.title).split('-').filter(w=>w.length>3)),shared=[...words].filter(w=>other.has(w)).length;return x.fingerprint===fingerprint||words.size>=4&&shared/Math.max(words.size,other.size)>=0.75;});
-    const state=entry.summary.length<180?'review':duplicate?'review':'queued',note=entry.summary.length<180?'Resumo insuficiente.':duplicate?'Possível duplicata entre fontes.':'';
+    const partner=/Reuters|France.Presse|Associated Press|Agência Lusa|\bAFP\b/i.test(entry.summary);
+    const state=entry.summary.length<180||duplicate||partner?'review':'queued',note=entry.summary.length<180?'Resumo insuficiente.':partner?'Conteúdo parceiro: confirmar permissão específica de reutilização.':duplicate?'Possível duplicata entre fontes.':'';
     await db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,note,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').run(randomUUID(),source.id,entry.uid,entry.url,entry.title,entry.summary,fingerprint,entry.originalAt,state,note,new Date().toISOString());
   }
 }

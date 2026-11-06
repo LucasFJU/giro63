@@ -35,3 +35,13 @@ As tabelas tags, article_tags, automation_sources, automation_items, automation_
 ## Verificação
 
 Foram acrescentados testes de tags, RSS, bloqueio de rede privada, validação dos dados gerados, fila, deduplicação, quotas, pausa, identidade de workflow e acesso por perfil. A suíte completa passou com 40 testes. A prévia abriu a inicial vazia e as telas autenticadas de Tags e Automação. A disponibilidade do modelo foi conferida sem gerar uma notícia ou ativar a publicação. A primeira execução agendada real deve ser conferida na aba Actions do GitHub.
+
+## Ativação e lote inicial — 06/11/2026
+
+Modelo fixado explicitamente na Vercel: `gemini-3.5-flash-lite`, após teste real. O 3.8 excedeu o prazo e os modelos 2.5 responderam indisponíveis para esta conta. Não há fallback automático.
+
+O script operacional `scripts/prepare-initial-news.js`, habilitado apenas por `PREPARE_INITIAL_NEWS=1`, preparou o lote inicial excepcional solicitado pelo proprietário. Ele nunca publica e exige a coleta e a publicação pausadas. A exceção limita-se a 20 matérias preparadas e até 24 tentativas específicas, com cada chamada somada aos contadores diários. Não está no comando de build normal. Os testes de diagnóstico também foram contabilizados.
+
+Os textos foram confrontados individualmente com o material RSS recebido, com correções de redação, temporalidade, números ambíguos e autoria de gol antes da publicação. Isso é uma revisão de consistência com a fonte, sem apuração independente. Não foram importadas fotografias. Somente a Agência Brasil está liberada; conteúdos de parceiros identificados permanecem para revisão de direitos.
+
+Após o lote inicial, mantêm-se os limites normais no código: 10 publicações/dia, até 3 nacionais e 20 chamadas/dia, em São Paulo. O histórico excepcional não é zerado: impede novas gerações no mesmo dia e os limites voltam a valer na virada do dia. Conteúdos sensíveis continuam em revisão. Backups incluem todas as tabelas `automation_*`, `tags` e `article_tags`.

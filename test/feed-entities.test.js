@@ -1,0 +1,4 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {parseFeed} from '../src/feed-reader.js';
+test('RSS decodifica HTML escapado e exclui chamadas relacionadas do contexto',()=>{const date=new Date(Date.now()-1000).toUTCString();const xml=`<rss><channel><item><title>Título &amp; exemplo</title><link>https://site.example/noticia</link><pubDate>${date}</pubDate><description>&lt;p&gt;Texto principal.&lt;/p&gt;&lt;h3&gt;Notícias relacionadas:&lt;/h3&gt;&lt;ul&gt;&lt;li&gt;Crime sem relação&lt;/li&gt;&lt;/ul&gt;&lt;p&gt;Continuação.&lt;/p&gt;</description></item></channel></rss>`;const [entry]=parseFeed(xml,['site.example']);assert.equal(entry.summary,'Texto principal. Continuação.');assert.ok(!entry.summary.includes('Crime'));assert.ok(!entry.summary.includes('&lt;'));});

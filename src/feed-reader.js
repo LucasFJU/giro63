@@ -25,13 +25,14 @@ export async function fetchFeed(url,hosts,redirects=0){
 }
 export function parseFeed(xml,hosts,now=Date.now()){
   if(/<!DOCTYPE|<!ENTITY/i.test(xml)||XMLValidator.validate(xml)!==true)throw Error('XML inválido ou não permitido.');
-  const parsed=new XMLParser({ignoreAttributes:false,processEntities:false}).parse(xml),raw=parsed.rss?.channel?.item??parsed.feed?.entry;if(!raw)throw Error('O endereço não contém um feed RSS ou Atom.');
+  const parsed=new XMLParser({ignoreAttributes:false,processEntities:true}).parse(xml),raw=parsed.rss?.channel?.item??parsed.feed?.entry;if(!raw)throw Error('O endereço não contém um feed RSS ou Atom.');
   return (Array.isArray(raw)?raw:[raw]).slice(0,50).flatMap(entry=>{
     try{
       const links=Array.isArray(entry.link)?entry.link:[entry.link];const link=links.find(x=>typeof x==='string'||x?.['@_rel']==='alternate'||!x?.['@_rel']);
       const url=approvedUrl(typeof link==='string'?link:link?.['@_href'],hosts).href;
       const originalAt=new Date(entry.pubDate||entry.published||entry.updated).toISOString(),age=now-Date.parse(originalAt);
-      const title=plain(entry.title?.['#text']??entry.title).slice(0,180),summary=plain(entry.description??entry.summary?.['#text']??entry.summary).slice(0,6000);
+      const received=String(entry.description??entry.summary?.['#text']??entry.summary??'').replace(/<h3\b[^>]*>\s*Notícias relacionadas:\s*<\/h3>\s*<ul\b[^>]*>[\s\S]*?<\/ul>/gi,'');
+      const title=plain(entry.title?.['#text']??entry.title).slice(0,180),summary=plain(received.replace(/<\/(?:p|li|h[1-6])>/gi,'$& ')).slice(0,6000);
       if(age<0||age>48*3600000||!title)return [];
       return [{uid:String(entry.guid?.['#text']??entry.guid??entry.id??url).slice(0,1000),url,title,summary,originalAt}];
     }catch{return [];}
