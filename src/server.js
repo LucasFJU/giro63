@@ -1,3 +1,6 @@
+import {initializeEditorial} from './editorial-schema.js';
+import {mountTags,tagsFor,assignTags} from './tags.js';
+import {mountAutomation,reservePublication} from './automation.js';
 import { mountPortal } from './portal.js';
 import { openPostgres, transaction } from './postgres.js';
 import { cloudMedia } from './cloud-media.js';
@@ -18,13 +21,14 @@ import { SQLiteSessionStore, csrf, checkCsrf, cleanBody, safeUrl } from './secur
 
 export const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const labels = {draft:'Rascunho',review:'Em revisão',published:'Publicado'};
-export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(root,'data'),uploadDir=path.join(root,'public','uploads'),seed=true,database=null}={}) {
+export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(root,'data'),uploadDir=path.join(root,'public','uploads'),seed=false,database=null}={}) {
   const cloud=!!process.env.DATABASE_URL;
   const uploadLimitMb=cloud?4:8;
   const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:uploadLimitMb*1024*1024,files:1,fields:25,fieldSize:250000}}).single('image');
   if(process.env.VERCEL&&!cloud)throw Error('DATABASE_URL obrigatória na Vercel.');
   if(!cloud)mkdirSync(uploadDir,{recursive:true});
   const db=database||(cloud?openPostgres(process.env.DATABASE_URL):openDatabase(dataDir)); if(seed&&!cloud)seedDemo(db);
+  await initializeEditorial(db);
   const secretFile=path.join(dataDir,'.session-secret');
   if(!cloud&&!existsSync(secretFile))writeFileSync(secretFile,randomBytes(48).toString('hex'),{mode:0o600});
   if(cloud&&String(process.env.SESSION_SECRET||'').length<48)throw Error('SESSION_SECRET precisa de pelo menos 48 caracteres.');
@@ -48,7 +52,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
     res.locals.user=req.session.userId?(await db.prepare('SELECT id,name,email,role FROM users WHERE id=? AND active=1').get(req.session.userId)):null;
     res.locals.path=req.path;res.locals.flash=req.session.flash||'';delete req.session.flash;
     res.locals.title='Notícias do Tocantins';res.locals.description='Giro63: notícias, cidades, cultura e perspectivas do Tocantins.';
-    res.locals.metadata=null;res.locals.ads=[];
+    res.locals.articleTags=[];res.locals.allTags=await db.prepare('SELECT * FROM tags ORDER BY name').all();res.locals.tagFilter=String(req.query.tag||'');res.locals.metadata=null;res.locals.ads=[];
     res.locals.editorialImage=media.get;res.locals.readingMinutes=readingMinutes;res.locals.shortPublication=shortPublication;res.locals.mostRead=(await popularArticles(db));
     next();
   });
@@ -68,9 +72,11 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
     page=Math.min(page,Math.max(1,Math.ceil(total/pageSize)));
     const articles=(await db.prepare(`SELECT * FROM articles WHERE status='published' AND (${where}) ORDER BY published_at DESC,id DESC LIMIT ? OFFSET ?`).all(...params,pageSize,(page-1)*pageSize));
     const q=String(req.query.q||'').slice(0,100),categoryFilter=String(req.query.editoria||'').slice(0,100),cityFilter=String(req.query.cidade||'').slice(0,150);
-    const pageLink=n=>{const params=new URLSearchParams();if(q)params.set('q',q);if(req.path==='/busca'){if(categoryFilter)params.set('editoria',categoryFilter);if(cityFilter)params.set('cidade',cityFilter);}params.set('page',String(n));return req.path+'?'+params.toString();};
+    const pageLink=n=>{const params=new URLSearchParams();if(q)params.set('q',q);if(req.path==='/busca'){if(categoryFilter)params.set('editoria',categoryFilter);if(cityFilter)params.set('cidade',cityFilter);}if(req.query.tag)params.set('tag',String(req.query.tag));params.set('page',String(n));return req.path+'?'+params.toString();};
     res.render('listing',{title:heading,heading,intro,articles,page,pages:Math.ceil(total/pageSize),total,q,categoryFilter,cityFilter,pageLink,base:req.path});
   }
+  mountTags(app,{db,requireUser,editor,checkCsrf,listing});
+  mountAutomation(app,{db,requireUser,editor,checkCsrf});
   app.get('/ultimas',async (req,res)=>(await listing(req,res,{heading:'Últimas notícias',intro:'Acompanhe o Tocantins, uma história de cada vez.'})));
   app.get('/editoria/:slug',async (req,res,next)=>{const cat=res.locals.categories.find(c=>c[0]===req.params.slug);if(!cat)return next();(await listing(req,res,{heading:cat[1],where:'category=?',params:[cat[0]],intro:'Contexto e informação sobre o que faz parte da sua vida.'}));});
   app.get('/cidade/:slug',async (req,res,next)=>{const city=res.locals.cities.find(c=>slugify(c)===req.params.slug);if(!city)return next();(await listing(req,res,{heading:city,where:'normalize_search(city)=normalize_search(?)',params:[city],intro:'As histórias que aproximam a sua cidade.'}));});
@@ -79,10 +85,12 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
     if(q){const escaped=q.replace(/[!%_]/g,'!$&');conditions.push("(normalize_search(title) LIKE normalize_search(?) ESCAPE '!' OR normalize_search(summary) LIKE normalize_search(?) ESCAPE '!' OR normalize_search(city) LIKE normalize_search(?) ESCAPE '!')");params.push(...Array(3).fill('%'+escaped+'%'));}
     if(category){conditions.push('category=?');params.push(category);}
     if(city){const place=res.locals.cities.find(c=>slugify(c)===city);if(place){conditions.push('normalize_search(city)=normalize_search(?)');params.push(place);}else conditions.push('0=1');}
+    if(req.query.tag){conditions.push('id IN (SELECT article_id FROM article_tags WHERE tag_slug=?)');params.push(String(req.query.tag));}
     (await listing(req,res,{heading:q?'Resultados para “'+q+'”':'Buscar no Giro63',where:conditions.length?conditions.join(' AND '):'0=1',params,intro:'Encontre notícias por assunto, editoria ou cidade.'}));
   });
   app.get('/noticia/:slug',async (req,res,next)=>{
     const article=(await db.prepare("SELECT a.*,u.name AS author_name FROM articles a LEFT JOIN users u ON u.id=a.author_id WHERE a.slug=? AND a.status='published'").get(req.params.slug));if(!article)return next();
+    res.locals.articleTags=await tagsFor(db,article.id);
     (await recordArticleRead(db,{method:req.method,session:req.session,sessionId:req.sessionID,user:res.locals.user,article}));res.locals.mostRead=(await popularArticles(db));
     const related=(await db.prepare("SELECT * FROM articles WHERE status='published' AND id<>? ORDER BY (category=?) DESC,published_at DESC LIMIT 4").all(article.id,article.category));
     const url=`http://localhost:${process.env.PORT||3000}/noticia/${article.slug}`;
@@ -117,7 +125,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
   const findEditable=async (req,res)=>{
     const a=(await db.prepare('SELECT * FROM articles WHERE id=?').get(Number(req.params.id)));
     if(!a){res.status(404).render('error',{title:'Matéria não encontrada',message:'Confira o endereço e volte ao painel.'});return null;}
-    if(res.locals.user.role!=='editor'&&(a.author_id!==res.locals.user.id||a.status==='published')){res.status(403).render('error',{title:'Acesso restrito',message:'Autores podem editar apenas suas próprias matérias ainda não publicadas.'});return null;}return a;
+    if(res.locals.user.role!=='editor'&&(a.author_id!==res.locals.user.id||a.status==='published')){res.status(403).render('error',{title:'Acesso restrito',message:'Autores podem editar apenas suas próprias matérias ainda não publicadas.'});return null;}a.tags=(await tagsFor(db,a.id)).map(t=>t.name).join(', ');res.locals.articleTags=await tagsFor(db,a.id);return a;
   };
   app.get('/admin/noticias/nova',(req,res)=>res.render('edit',{title:'Nova matéria',article:blankArticle(),error:''}));
   app.get('/admin/noticias/:id',async (req,res)=>{const article=(await findEditable(req,res));if(article)res.render('edit',{title:'Editar matéria',article,error:''});});
@@ -138,7 +146,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
     const desired=req.body.action||'draft';
     const allowed=isEditor?['draft','review','published']:['draft','review'];
     if(!allowed.includes(desired))return res.status(403).render('error',{title:'Ação não permitida',message:'Apenas editores podem publicar matérias.'});
-    const a={...blankArticle(),...old,title:String(req.body.title||'').trim().slice(0,180),summary:String(req.body.summary||'').trim().slice(0,500),body:cleanBody(req.body.body),category:String(req.body.category||''),city:String(req.body.city||'').trim().slice(0,100),cover_alt:String(req.body.cover_alt??old?.cover_alt??'').trim().slice(0,250),credit:String(req.body.credit||'').trim().slice(0,250),sources:String(req.body.sources||'').trim().slice(0,3000),byline:isEditor?String(req.body.byline||'').trim().slice(0,100):res.locals.user.name,demo:req.body.demo==='on'?1:0,status:desired,featured:isEditor?Math.max(0,Math.min(4,Number.parseInt(req.body.featured)||0)):(old?.featured||0),urgent:isEditor&&req.body.urgent==='on'?1:(isEditor?0:(old?.urgent||0)),feedback:isEditor?String(req.body.feedback||'').slice(0,2000):(old?.feedback||'')};
+    const a={...blankArticle(),...old,tags:String(req.body.tags||'').slice(0,500),title:String(req.body.title||'').trim().slice(0,180),summary:String(req.body.summary||'').trim().slice(0,500),body:cleanBody(req.body.body),category:String(req.body.category||''),city:String(req.body.city||'').trim().slice(0,100),cover_alt:String(req.body.cover_alt??old?.cover_alt??'').trim().slice(0,250),credit:String(req.body.credit||'').trim().slice(0,250),sources:String(req.body.sources||'').trim().slice(0,3000),byline:isEditor?String(req.body.byline||'').trim().slice(0,100):res.locals.user.name,demo:req.body.demo==='on'?1:0,status:desired,featured:isEditor?Math.max(0,Math.min(4,Number.parseInt(req.body.featured)||0)):(old?.featured||0),urgent:isEditor&&req.body.urgent==='on'?1:(isEditor?0:(old?.urgent||0)),feedback:isEditor?String(req.body.feedback||'').slice(0,2000):(old?.feedback||'')};
     if(!a.title||!a.summary||!a.body.replace(/<[^>]*>/g,'').trim()||!res.locals.categories.some(c=>c[0]===a.category))return res.status(400).render('edit',{title:'Revise a matéria',article:a,error:'Preencha título, resumo, conteúdo e uma editoria válida.'});
     try {
       if(req.file&&!a.credit)return res.status(400).render('edit',{title:'Crédito obrigatório',article:a,error:'Informe o crédito da imagem antes de enviar.'});
@@ -152,9 +160,11 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
       await transaction(db,async()=>{
         if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
         if(a.featured>0&&desired==='published')(await db.prepare('UPDATE articles SET featured=0 WHERE featured=? AND id<>?').run(a.featured,old?.id||0));
+        if(desired==='published'&&old?.status!=='published'){const imported=old?await db.prepare('SELECT i.id,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.article_id=? AND i.state<>?').get(old.id,'published'):null;if(imported){if(!await reservePublication(db,imported.region==='regional'))throw Error('Limite diário de publicações automáticas atingido.');await db.prepare("UPDATE automation_items SET state='published' WHERE id=?").run(imported.id);}}
         const values=[a.title,a.summary,a.body,a.category,a.city,a.byline,a.cover,a.cover_alt,a.credit,a.sources,a.status,a.featured,a.urgent,a.demo,a.feedback,now,desired==='published'?(old?.published_at||now):old?.published_at||null];
         if(old)(await db.prepare('UPDATE articles SET title=?,summary=?,body=?,category=?,city=?,byline=?,cover=?,cover_alt=?,credit=?,sources=?,status=?,featured=?,urgent=?,demo=?,feedback=?,updated_at=?,published_at=? WHERE id=?').run(...values,old.id));
         else (await db.prepare('INSERT INTO articles(title,summary,body,category,city,byline,cover,cover_alt,credit,sources,status,featured,urgent,demo,feedback,updated_at,published_at,slug,author_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(...values,slug,res.locals.user.id,now));
+        const taggedId=old?.id||(await db.prepare('SELECT id FROM articles WHERE slug=?').get(slug)).id;await db.prepare('DELETE FROM article_tags WHERE article_id=?').run(taggedId);await assignTags(db,taggedId,a.tags);
       });
       const savedId=old?.id||(await db.prepare('SELECT id FROM articles WHERE slug=?').get(slug)).id;
       flash(req,desired==='published'?'Matéria publicada no portal.':desired==='review'?'Matéria enviada para revisão.':'Rascunho salvo.');res.redirect(desired==='draft'?'/admin/noticias/'+savedId:'/admin/materias');
