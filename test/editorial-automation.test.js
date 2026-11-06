@@ -14,6 +14,10 @@ import {validWorkflow} from '../src/workflow-auth.js';
 import {createApp} from '../src/server.js';
 const temporary=()=>mkdtempSync(path.join(os.tmpdir(),'giro63-automation-'));
 const article=db=>Number(db.prepare("INSERT INTO articles(slug,title,category,status,created_at,updated_at) VALUES('teste','Teste','cidades','published',?,?)").run(new Date().toISOString(),new Date().toISOString()).lastInsertRowid);
+
+test('licença da fonte não libera automaticamente conteúdo de agência parceira',async()=>{
+ const dir=temporary(),db=openDatabase(dir);try{await initializeEditorial(db);await ingest(db,{id:'agencia-brasil'},[{uid:'partner',url:'https://agenciabrasil.ebc.com.br/partner',title:'Informe internacional',summary:'Informações recebidas da Reuters. '+('Contexto confirmado. '.repeat(15)),originalAt:new Date().toISOString()}]);const item=db.prepare("SELECT state,note FROM automation_items WHERE uid='partner'").get();assert.equal(item.state,'review');assert.match(item.note,/permissão específica/);}finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});
 test('tags normalizam acentos e espaços, limitam nomes genéricos e reaproveitam associações',async()=>{
  const dir=temporary(),db=openDatabase(dir);try{await initializeEditorial(db);const id=article(db);await assignTags(db,id,['Educação',' educação ','NOTÍCIAS','G1','Transporte']);await assignTags(db,id,['EDUCACAO']);assert.deepEqual((await tagsFor(db,id)).map(t=>t.slug).sort(),['educacao','transporte']);}finally{db.close();rmSync(dir,{recursive:true,force:true});}
 });

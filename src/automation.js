@@ -21,7 +21,8 @@ export async function ingest(db,source,entries){
     const candidates=await db.prepare('SELECT title,fingerprint FROM automation_items WHERE original_at>=?').all(new Date(Date.now()-48*3600000).toISOString());
     const words=new Set(slugify(entry.title).split('-').filter(w=>w.length>3));
     const duplicate=candidates.some(x=>{const other=new Set(slugify(x.title).split('-').filter(w=>w.length>3)),shared=[...words].filter(w=>other.has(w)).length;return x.fingerprint===fingerprint||words.size>=4&&shared/Math.max(words.size,other.size)>=0.75;});
-    const state=entry.summary.length<180?'review':duplicate?'review':'queued',note=entry.summary.length<180?'Resumo insuficiente.':duplicate?'Possível duplicata entre fontes.':'';
+    const partner=/Reuters|France.Presse|Associated Press|Agência Lusa|\bAFP\b/i.test(entry.summary);
+    const state=entry.summary.length<180||duplicate||partner?'review':'queued',note=entry.summary.length<180?'Resumo insuficiente.':partner?'Conteúdo parceiro: confirmar permissão específica de reutilização.':duplicate?'Possível duplicata entre fontes.':'';
     await db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,note,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').run(randomUUID(),source.id,entry.uid,entry.url,entry.title,entry.summary,fingerprint,entry.originalAt,state,note,new Date().toISOString());
   }
 }
@@ -35,10 +36,10 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
     const sources=await db.prepare('SELECT * FROM automation_sources WHERE active=1 AND approved=1 ORDER BY region DESC,id').all();
     for(const source of sources){if(Date.now()>deadline-25000)break;try{await ingest(db,source,parseFeed(await readFeed(source.feed,source.hosts.split(',')),source.hosts.split(',')));await db.prepare("UPDATE automation_sources SET last_error='' WHERE id=?").run(source.id);}catch{await db.prepare('UPDATE automation_sources SET last_error=? WHERE id=?').run('Falha ao consultar ou validar o feed. Confira o endereço e tente novamente.',source.id);}}
     await db.prepare("UPDATE automation_items SET state=CASE WHEN attempts<2 THEN 'failed' ELSE 'review' END,note='Execução anterior interrompida.' WHERE state='processing' AND updated_at<?").run(new Date(now-120000).toISOString());
-    const queue=await db.prepare("SELECT i.*,s.name AS source_name,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state IN ('queued','failed') AND i.attempts<2 AND s.active=1 AND s.approved=1 AND i.original_at>=? ORDER BY s.region DESC,i.original_at DESC LIMIT 2").all(new Date(now-48*3600000).toISOString());
+    const queue=await db.prepare("SELECT i.*,s.name AS source_name,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state IN ('queued','failed') AND i.attempts<2 AND s.active=1 AND s.approved=1 AND i.original_at>=? ORDER BY s.region DESC,i.original_at DESC LIMIT 1").all(new Date(now-48*3600000).toISOString());
     const categories=(await db.prepare('SELECT slug FROM editorial_categories').all()).map(x=>x.slug);
     for(const item of queue){
-      if(Date.now()>deadline-22000)break;
+      if(Date.now()>deadline-37000)break;
       const day=dayInSaoPaulo();const claimed=await transaction(db,async()=>{
         await db.prepare('INSERT INTO automation_daily(day) VALUES(?) ON CONFLICT DO NOTHING').run(day);
         const quota=await db.prepare('UPDATE automation_daily SET calls=calls+1 WHERE day=? AND calls<20').run(day);if(!quota.changes)return false;
@@ -54,7 +55,7 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
           await assignTags(db,saved.lastInsertRowid,result.tags);
           await db.prepare('UPDATE automation_items SET state=?,article_id=?,note=?,updated_at=? WHERE id=?').run(publish?'published':'review',saved.lastInsertRowid,result.alerts.join(' · ')||(result.sensitive?'Tema sensível: revisão editorial obrigatória.':publish?'Publicado automaticamente.':'Publicação automática pausada ou quota atingida.'),stamp,item.id);
         });processed++;
-      }catch(error){await db.prepare('UPDATE automation_items SET state=?,note=?,updated_at=? WHERE id=?').run(item.attempts+1>=2?'review':'failed',/Gemini|JSON|Campos|Texto/.test(error.message)?error.message.slice(0,200):'Falha no processamento. Nova tentativa limitada.',new Date().toISOString(),item.id);}
+      }catch(error){await db.prepare('UPDATE automation_items SET state=?,note=?,updated_at=? WHERE id=?').run(item.attempts+1>=2?'review':'failed',/Gemini|JSON|Campos|Texto/.test(error.message)?error.message.slice(0,200):error.name==='TimeoutError'?'Gemini excedeu o prazo de 35 segundos.':'Falha no processamento. Nova tentativa limitada.',new Date().toISOString(),item.id);}
     }
     await event(db,'Execução concluída. Itens processados: '+processed);return {message:'Execução concluída.',processed};
   }finally{await db.prepare('DELETE FROM automation_lock WHERE id=? AND owner=?').run('runner',owner);}
