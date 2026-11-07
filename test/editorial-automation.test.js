@@ -9,7 +9,7 @@ import {initializeEditorial} from '../src/editorial-schema.js';
 import {assignTags,tagsFor} from '../src/tags.js';
 import {parseFeed,approvedUrl,publicAddress,isVideoEntry} from '../src/feed-reader.js';
 import {validateGenerated} from '../src/gemini-editor.js';
-import {ingest,runAutomation,reservePublication,trimAutomationQueue} from '../src/automation.js';
+import {ingest,runAutomation,reservePublication,trimAutomationQueue,automationPriority,selectAutomationItem} from '../src/automation.js';
 import {validWorkflow} from '../src/workflow-auth.js';
 import {createApp} from '../src/server.js';
 const temporary=()=>mkdtempSync(path.join(os.tmpdir(),'giro63-automation-'));
@@ -90,9 +90,9 @@ test('matérias desenvolvidas aceitam mais parágrafos e textos curtos exigem re
 });
 
 test('fila limita 20 itens, quatro nacionais e expira mais de 48 horas',async()=>{
- const dir=temporary(),db=openDatabase(dir);try{await initializeEditorial(db);const now=Date.now();
+ const dir=temporary(),db=openDatabase(dir);try{await initializeEditorial(db);const now=Date.parse('2026-11-07T15:00:00Z');
  for(let n=0;n<35;n++)db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run('queue-'+n,n<18?'g1-tocantins':'agencia-brasil','q'+n,'https://example.test/'+n,'Título '+n,'Material','fp'+n,new Date(now-(n===0?49:1)*3600000).toISOString(),'queued',new Date(now).toISOString());
- await trimAutomationQueue(db,now);const rows=db.prepare("SELECT source_id FROM automation_items WHERE state='queued'").all();assert.equal(rows.length,20);assert.equal(rows.filter(r=>r.source_id==='agencia-brasil').length,3);assert.match(db.prepare("SELECT note FROM automation_items WHERE id='queue-0'").get().note,/Expirado/);
+ await trimAutomationQueue(db,now);const rows=db.prepare("SELECT source_id FROM automation_items WHERE state='queued'").all();assert.equal(rows.length,20);assert.equal(rows.filter(r=>r.source_id==='agencia-brasil').length,4);assert.match(db.prepare("SELECT note FROM automation_items WHERE id='queue-0'").get().note,/Expirado/);
  await trimAutomationQueue(db,now+49*3600000);assert.equal(db.prepare("SELECT count(*) n FROM automation_items WHERE state='queued'").get().n,0);
  }finally{db.close();rmSync(dir,{recursive:true,force:true});}
 });
@@ -116,5 +116,24 @@ test('vídeos e edições não entram na coleta; vídeos pendentes são retirado
  await ingest(db,source,[{title:'VÍDEOS: Jornal',url:'https://g1.globo.com/to/tocantins/edicao/teste.ghtml',uid:'v',summary:'Resumo '.repeat(50),originalAt:stamp}]);assert.equal(db.prepare('SELECT count(*) n FROM automation_items').get().n,0);
  const id=article(db);db.prepare("INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,updated_at,article_id) VALUES('v','g1-tocantins','v','https://g1.globo.com/to/tocantins/edicao/teste.ghtml','VÍDEOS: Jornal','Resumo','f',?,'review',?,?)").run(stamp,stamp,id);
  await trimAutomationQueue(db);assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='v'").get().state,'discarded');assert.equal(db.prepare('SELECT status FROM articles WHERE id=?').get(id).status,'published');
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('prioridade diária: duas horas exatas, nacionais, regionais antigas e cotas',async()=>{
+ const dir=temporary(),db=openDatabase(dir),now=Date.parse('2026-11-07T15:00:00Z');try{await initializeEditorial(db);db.prepare("UPDATE automation_sources SET active=1,approved=1").run();
+ const add=(id,region,date,state='queued',attempts=0)=>db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,attempts,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id,region==='regional'?'g1-tocantins':'agencia-brasil',id,'https://example.test/'+id,id,'Material','f'+id,date,state,attempts,new Date(now).toISOString());
+ add('old-region','regional','2026-11-07T12:59:59.999Z');add('national','national','2026-11-07T14:30:00Z');add('boundary','regional','2026-11-07T13:00:00Z');add('yesterday','regional','2026-11-07T02:59:59Z');add('future','regional','2026-11-07T15:00:01Z');add('already-review','regional','2026-11-07T14:59:00Z','review');add('exhausted','regional','2026-11-07T14:59:00Z','failed',2);
+ assert.equal((await selectAutomationItem(db,now)).id,'boundary');db.prepare("UPDATE automation_items SET state='review' WHERE id='boundary'").run();assert.equal((await selectAutomationItem(db,now)).id,'national');
+ db.prepare("INSERT INTO automation_daily(day,national) VALUES('2026-11-07',3)").run();assert.equal((await selectAutomationItem(db,now)).id,'old-region');db.prepare("UPDATE automation_daily SET published=10").run();assert.equal(await selectAutomationItem(db,now),null);db.prepare("UPDATE automation_daily SET published=0,calls=20").run();assert.equal(await selectAutomationItem(db,now),null);
+ await trimAutomationQueue(db,now);assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='yesterday'").get().state,'discarded');assert.equal(db.prepare("SELECT note FROM automation_items WHERE id='yesterday'").get().note,'Fora do dia atual');assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='already-review'").get().state,'review');
+ assert.equal(automationPriority({region:'regional',original_at:'2026-11-07T02:59:59Z'},Date.parse('2026-11-07T03:00:00Z')),null);assert.equal(automationPriority({region:'regional',original_at:'2026-11-07T03:00:00Z'},Date.parse('2026-11-07T03:00:00Z')),0);
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});
+test('sem notícias do dia não chama Gemini; falha regional permite nacional',async()=>{
+ const dir=temporary(),db=openDatabase(dir),now=Date.parse('2026-11-07T15:00:00Z');try{await initializeEditorial(db);db.prepare("UPDATE settings SET value='0' WHERE key='automation_paused'").run();db.prepare("UPDATE automation_sources SET active=1,approved=1,feed='https://example.test/rss' WHERE id IN ('g1-tocantins','agencia-brasil')").run();let generated=0;
+ const empty={now,key:'test',readFeed:async()=>'<rss><channel><item><title>Sem data</title></item></channel></rss>',generate:async()=>{generated++;throw Error('Gemini teste');}};
+ await runAutomation(db,empty);assert.equal(generated,0);assert.equal(db.prepare('SELECT count(*) n FROM automation_daily').get().n,0);
+ db.prepare("INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,updated_at) VALUES('national','agencia-brasil','n','https://example.test/n','Notícia','Material','fp','2026-11-07T14:30:00Z','queued','2026-11-07T14:30:00Z')").run();
+ await runAutomation(db,{...empty,readFeed:async()=>{throw Error('Fonte indisponível');}});assert.equal(generated,1);assert.equal(db.prepare("SELECT calls FROM automation_daily WHERE day='2026-11-07'").get().calls,1);assert.match(db.prepare("SELECT last_error FROM automation_sources WHERE id='g1-tocantins'").get().last_error,/indisponível/);assert.ok(db.prepare("SELECT message FROM automation_events WHERE message LIKE 'Seleção: Nacional do dia%'").get());
  }finally{db.close();rmSync(dir,{recursive:true,force:true});}
 });
