@@ -31,3 +31,9 @@ O laranja do tema, dos destaques e da faixa de últimas notícias é `#ED521A`, 
 As legendas das matérias que utilizam essas imagens apresentam autoria, fonte, modificações e links das licenças.
 
 - Login: imagem fornecida pelo usuário Duna-Dourada-scaled.jpg, copiada sem alterações para public/images/login-dunas.jpg. A camada azul é aplicada apenas via CSS.
+
+## Versões leves para leitura — 07/11/2026
+
+O cabeçalho, login e rodapé usam derivados WebP transparentes das marcas originais: giro63-logo-branca.webp (17.130 bytes) e giro63-assinatura-oficial.webp (27.668 bytes), largura de 640 px. Os PNGs originais foram preservados para novas exportações. A arte ilustrativa Giro63 também possui versões responsivas em public/images/responsive.
+
+Recortes editoriais novos no Storage recebem o tamanho no nome e versões de 160, 320, 640, 960 e 1600 px quando couberem no original. O build atualiza somente os recortes de exibição antigos de photo_cover e photo_thumb, sem apagar arquivos ou alterar a foto original e o recorte social existente. As atualizações são condicionadas ao endereço anterior para preservar mudanças da redação; builds seguintes ignoram os já atualizados.

@@ -10,3 +10,7 @@
 .audience-filters>div{min-width:0}.audience-filters input{width:100%;min-width:0}
 @media(max-width:600px){.audience-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:420px){.audience-filters{grid-template-columns:minmax(0,1fr)}}
+
+/* Compact consent notice with equally accessible choices. */
+.cookie-feedback:empty{display:none}.cookie-banner h2{font-size:16px}.cookie-banner p{font-size:13px;line-height:1.5}
+@media(max-width:600px){.cookie-banner{padding:12px 14px;gap:10px;border-radius:8px;bottom:8px}.cookie-banner h2{font-size:15px;margin-bottom:4px}.cookie-banner p{font-size:12px;line-height:1.45}.cookie-actions{gap:8px}.cookie-actions .button{min-height:44px;font-size:12px;padding:8px}.cookie-actions .button:first-child,.cookie-actions .button:last-child{flex:1 1 0}}
