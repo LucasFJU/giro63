@@ -28,7 +28,7 @@ test('RSS e rede rejeitam endereços privados, XML perigoso e itens fora da jane
  assert.equal(parseFeed(xml,['site.example'],now)[0].url,'https://site.example/noticia');assert.equal(parseFeed(xml,['site.example'],now+49*3600000).length,0);
 });
 test('validação Gemini encaminha temas sensíveis e dados não confirmados à revisão',()=>{
- const item={title:'Informação sobre transporte',summary:'O serviço de transporte foi anunciado em Palmas.'},v={title:'Transporte em Palmas',summary:'Informações sobre o serviço.',paragraphs:['O serviço foi anunciado em Palmas.'],category:'cidades',city:'Palmas',tags:['Transporte'],sensitive:false,alerts:[]};assert.equal(validateGenerated(v,item,['cidades']).alerts.length,0);assert.equal(validateGenerated({...v,city:'Gurupi',paragraphs:['O serviço terá 30 veículos.']},item,['cidades']).alerts.length,2);assert.throws(()=>validateGenerated({...v,category:'inexistente'},item,['cidades']));assert.equal(validateGenerated(v,{...item,title:'Suspeito de crime é preso'},['cidades']).sensitive,true);
+ const item={title:'Informação sobre transporte',summary:'O serviço de transporte foi anunciado em Palmas.'},v={title:'Transporte em Palmas',summary:'Informações sobre o serviço.',paragraphs:['O serviço foi anunciado em Palmas.'],category:'cidades',city:'Palmas',tags:['Transporte'],sensitive:false,alerts:[]};assert.equal(validateGenerated(v,item,['cidades']).alerts.length,1);assert.equal(validateGenerated({...v,city:'Gurupi',paragraphs:['O serviço terá 30 veículos.']},item,['cidades']).alerts.length,3);assert.throws(()=>validateGenerated({...v,category:'inexistente'},item,['cidades']));assert.equal(validateGenerated(v,{...item,title:'Suspeito de crime é preso'},['cidades']).sensitive,true);
 });
 test('fila persistida, publicação, revisão, duplicatas, pausa e quota de chamadas',async()=>{
  const dir=temporary(),db=openDatabase(dir);try{
@@ -60,4 +60,13 @@ test('painel de tags e automação exige editor; busca e página de tags preserv
    }
   }
  }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('matérias desenvolvidas aceitam mais parágrafos e textos curtos exigem revisão',()=>{
+ const paragraph='A prefeitura informou os detalhes do serviço de transporte em Palmas para orientar a população sobre o atendimento disponível na cidade e a organização das atividades.';
+ const item={title:'Transporte em Palmas',summary:Array(10).fill(paragraph).join(' ')};
+ const value={title:item.title,summary:'Detalhes do serviço de transporte.',paragraphs:Array(8).fill(paragraph),category:'cidades',city:'Palmas',tags:[],sensitive:false,alerts:[]};
+ assert.equal(validateGenerated(value,item,['cidades']).alerts.length,0);
+ assert.match(validateGenerated({...value,paragraphs:[paragraph]},item,['cidades']).alerts.join(' '),/pouco desenvolvido/);
+ assert.match(validateGenerated({...value,paragraphs:[paragraph]},{...item,summary:paragraph},['cidades']).alerts.join(' '),/Material recebido curto/);
 });
