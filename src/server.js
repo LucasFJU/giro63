@@ -1,3 +1,4 @@
+import {directoryData} from './admin-directory.js';
 import {contentHash,parseCodes,issueLabels,pendingCodes,factIssues,imageEligible,publicationError} from './publication-policy.js';
 import {initializeEditorial} from './editorial-schema.js';
 import {mountTags,tagsFor,assignTags} from './tags.js';
@@ -120,22 +121,38 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
   app.post('/admin/logout',requireUser,checkCsrf,(req,res,next)=>req.session.destroy(err=>err?next(err):res.clearCookie('giro63.sid').redirect('/admin/login')));
   app.use('/admin',requireUser);
   app.get(['/admin','/admin/materias'],async (req,res)=>{
-    const user=res.locals.user,overview=req.path==='/admin',q=String(req.query.q||'').trim().slice(0,100),status=['draft','review','published','checking'].includes(req.query.status)?req.query.status:'',category=String(req.query.category||'').slice(0,100);
+    const user=res.locals.user,overview=req.path==='/admin',q=String(req.query.q||'').trim().slice(0,100),status=['draft','review','published','checking','archived','trash'].includes(req.query.status)?req.query.status:'',category=String(req.query.category||'').slice(0,100);
     const base=user.role==='author'?'a.author_id=?':'1=1',baseParams=user.role==='author'?[user.id]:[];
     const checking="EXISTS(SELECT 1 FROM automation_items i WHERE i.article_id=a.id AND i.review_pending=1)";
-    const stats=await db.prepare(`SELECT count(*) AS total,SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) AS draft,SUM(CASE WHEN status='review' THEN 1 ELSE 0 END) AS review,SUM(CASE WHEN status='published' THEN 1 ELSE 0 END) AS published FROM articles a WHERE ${base}`).get(...baseParams);
-    const conditions=[base],params=[...baseParams];
-    if(!overview){if(q){conditions.push("normalize_search(a.title||' '||COALESCE(u.name,a.byline,'')||' '||a.city) LIKE normalize_search(?) ESCAPE '!'");params.push('%'+q.replace(/[!%_]/g,'!$&')+'%');}if(status==='checking')conditions.push("a.status='published' AND "+checking);else if(status){conditions.push('a.status=?');params.push(status);}if(category){conditions.push('a.category=?');params.push(category);}}
+    const stats=await db.prepare(`SELECT count(*) AS total,SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) AS draft,SUM(CASE WHEN status='review' THEN 1 ELSE 0 END) AS review,SUM(CASE WHEN status='published' THEN 1 ELSE 0 END) AS published FROM articles a WHERE ${base} AND a.archived_at='' AND a.deleted_at=''`).get(...baseParams);
+    const conditions=[base,status==='trash'?"a.deleted_at<>''":status==='archived'?"a.archived_at<>'' AND a.deleted_at=''":"a.archived_at='' AND a.deleted_at=''"],params=[...baseParams];
+    if(!overview){if(q){conditions.push("normalize_search(a.title||' '||COALESCE(u.name,a.byline,'')||' '||a.city) LIKE normalize_search(?) ESCAPE '!'");params.push('%'+q.replace(/[!%_]/g,'!$&')+'%');}if(status==='checking')conditions.push("a.status='published' AND "+checking);else if(status&&!['archived','trash'].includes(status)){conditions.push('a.status=?');params.push(status);}if(category){conditions.push('a.category=?');params.push(category);}}
     const join='FROM articles a LEFT JOIN users u ON u.id=a.author_id WHERE '+conditions.join(' AND '),total=Number((await db.prepare('SELECT count(*) AS n '+join).get(...params)).n),page=Math.min(Math.max(1,parseInt(req.query.page)||1),Math.max(1,Math.ceil(total/20)));
     const articles=await db.prepare('SELECT a.*,u.name AS author_name,CASE WHEN '+checking+' THEN 1 ELSE 0 END AS review_pending '+join+' ORDER BY a.updated_at DESC,a.id DESC LIMIT ? OFFSET ?').all(...params,overview?10:20,overview?0:(page-1)*20);
     const pageLink=n=>'/admin/materias?'+new URLSearchParams({q,status,category,page:String(n)});
     res.render('dashboard',{title:overview?'Visão geral':'Matérias',articles,stats,q,status,category,page,total,pages:Math.ceil(total/20),pageLink});
+  });
+  app.post('/admin/materias/:id/:operation',checkCsrf,async(req,res)=>{
+    const id=Number(req.params.id),operation=req.params.operation;if(!Number.isSafeInteger(id)||!['arquivar','excluir','restaurar'].includes(operation))return res.sendStatus(404);
+    const result=await transaction(db,async()=>{
+      if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
+      const item=await db.prepare('SELECT * FROM articles WHERE id=?').get(id);if(!item)return 404;
+      if(res.locals.user.role!=='editor'&&(item.author_id!==res.locals.user.id||item.status==='published'))return 403;
+      const stamp=new Date().toISOString();
+      if(operation==='restaurar')await db.prepare("UPDATE articles SET archived_at='',deleted_at='',status='draft',featured=0,updated_at=? WHERE id=?").run(stamp,id);
+      else if(operation==='excluir')await db.prepare("UPDATE articles SET deleted_at=?,status='draft',featured=0,updated_at=? WHERE id=?").run(stamp,stamp,id);
+      else if(!item.deleted_at)await db.prepare("UPDATE articles SET archived_at=?,status='draft',featured=0,updated_at=? WHERE id=?").run(stamp,stamp,id);
+      await db.prepare("UPDATE automation_items SET state='review' WHERE article_id=? AND state='published'").run(id);
+      return 302;
+    });if(result!==302)return res.sendStatus(result);
+    flash(req,operation==='excluir'?'Matéria enviada para a lixeira. Pode ser restaurada.':operation==='arquivar'?'Matéria arquivada e retirada do site.':'Matéria restaurada como rascunho.');res.redirect('/admin/materias'+(operation==='excluir'?'?status=trash':operation==='arquivar'?'?status=archived':''));
   });
   const blankArticle=()=>({id:null,title:'',summary:'',body:'',category:'cidades',city:'',byline:'',cover:'',cover_alt:'',credit:'',sources:'',status:'draft',featured:0,urgent:0,demo:0,feedback:''});
   const findEditable=async (req,res)=>{
     const id=Number(req.params.id);
     const a=Number.isSafeInteger(id)&&id>0?await db.prepare('SELECT * FROM articles WHERE id=?').get(id):null;
     if(!a){res.status(404).render('error',{title:'Matéria não encontrada',message:'Confira o endereço e volte ao painel.'});return null;}
+    if(a.archived_at||a.deleted_at){res.status(409).render('error',{title:'Matéria guardada',message:'Restaure a matéria na lista de Arquivadas ou na Lixeira antes de editar.'});return null;}
     if(res.locals.user.role!=='editor'&&(a.author_id!==res.locals.user.id||a.status==='published')){res.status(403).render('error',{title:'Acesso restrito',message:'Autores podem editar apenas suas próprias matérias ainda não publicadas.'});return null;}res.locals.sourceItem=await db.prepare('SELECT i.*,s.name AS source_name FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.article_id=?').get(a.id);a.tags=(await tagsFor(db,a.id)).map(t=>t.name).join(', ');res.locals.articleTags=await tagsFor(db,a.id);res.locals.imageSuggestions=await db.prepare("SELECT * FROM article_image_suggestions WHERE article_id=? AND status='pending' ORDER BY created_at DESC").all(a.id);return a;
   };
   app.get('/admin/noticias/nova',(req,res)=>res.render('edit',{title:'Nova matéria',article:blankArticle(),error:''}));
@@ -251,7 +268,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
   }
   app.post('/admin/noticias',articleUpload,checkCsrf,saveArticle);
   app.post('/admin/noticias/:id',articleUpload,checkCsrf,saveArticle);
-  const categoryPage=async (res,error='')=>res.render('categories',{title:'Categorias',error,items:(await db.prepare('SELECT c.*,(SELECT COUNT(*) FROM articles a WHERE a.category=c.slug) AS total FROM editorial_categories c ORDER BY position,name').all())});
+  const categoryPage=async (res,error='')=>res.render('categories',{title:'Categorias',error,...directoryData(await db.prepare('SELECT c.*,(SELECT COUNT(*) FROM articles a WHERE a.category=c.slug) AS total FROM editorial_categories c ORDER BY position,name').all(),res.req.query)});
   app.get('/admin/categorias',editor,async (req,res)=>(await categoryPage(res)));
   app.post('/admin/categorias',editor,checkCsrf,async (req,res)=>{
     const name=String(req.body.name||'').trim().slice(0,80),slug=slugify(name);
