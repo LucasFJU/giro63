@@ -65,3 +65,18 @@ ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS photo_y INTEGER NOT NULL DE
 CREATE TABLE IF NOT EXISTS giro63.article_image_suggestions(id TEXT PRIMARY KEY,article_id BIGINT NOT NULL REFERENCES giro63.articles(id),image_url TEXT NOT NULL,source_page TEXT NOT NULL,source TEXT NOT NULL DEFAULT '',photographer TEXT NOT NULL DEFAULT '',caption TEXT NOT NULL DEFAULT '',alt TEXT NOT NULL DEFAULT '',license TEXT NOT NULL DEFAULT '',status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','approved','rejected')),created_at TEXT NOT NULL,reviewed_at TEXT,reviewed_by BIGINT REFERENCES giro63.users(id),UNIQUE(article_id,image_url)); CREATE INDEX IF NOT EXISTS image_suggestion_article ON giro63.article_image_suggestions(article_id,status);
 ALTER TABLE giro63.article_image_suggestions ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON giro63.article_image_suggestions FROM PUBLIC,anon,authenticated;
+
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS policy_version INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS blockers TEXT NOT NULL DEFAULT '["LEGACY_REVIEW"]';
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS review_reasons TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS review_pending INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS reviewed_by BIGINT REFERENCES giro63.users(id);
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS reviewed_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS resolution_note TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS approved_cover TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS publication_counted INTEGER NOT NULL DEFAULT 0;
+UPDATE giro63.automation_items SET publication_counted=1 WHERE state='published';
+
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS confirmed_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS review_completed_by BIGINT REFERENCES giro63.users(id);
+ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS review_completed_at TEXT NOT NULL DEFAULT '';

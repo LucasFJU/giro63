@@ -28,7 +28,7 @@ test('RSS e rede rejeitam endereços privados, XML perigoso e itens fora da jane
  assert.equal(parseFeed(xml,['site.example'],now)[0].url,'https://site.example/noticia');assert.equal(parseFeed(xml,['site.example'],now+49*3600000).length,0);
 });
 test('validação Gemini encaminha temas sensíveis e dados não confirmados à revisão',()=>{
- const item={title:'Informação sobre transporte',summary:'O serviço de transporte foi anunciado em Palmas.'},v={title:'Transporte em Palmas',summary:'Informações sobre o serviço.',paragraphs:['O serviço foi anunciado em Palmas.'],category:'cidades',city:'Palmas',tags:['Transporte'],sensitive:false,alerts:[]};assert.equal(validateGenerated(v,item,['cidades']).alerts.length,1);assert.equal(validateGenerated({...v,city:'Gurupi',paragraphs:['O serviço terá 30 veículos.']},item,['cidades']).alerts.length,3);assert.throws(()=>validateGenerated({...v,category:'inexistente'},item,['cidades']));assert.equal(validateGenerated(v,{...item,title:'Suspeito de crime é preso'},['cidades']).sensitive,true);
+ const item={title:'Informação sobre transporte',summary:'O serviço de transporte foi anunciado em Palmas.'},v={title:'Transporte em Palmas',summary:'Informações sobre o serviço.',paragraphs:['O serviço foi anunciado em Palmas.'],category:'cidades',city:'Palmas',tags:['Transporte'],sensitive:false,alerts:[]};assert.equal(validateGenerated(v,item,['cidades']).issues.blockers.length,0);assert.deepEqual(validateGenerated({...v,city:'Gurupi',paragraphs:['O serviço terá 30 veículos.']},item,['cidades']).issues.blockers,['UNCONFIRMED_NUMBER']);assert.throws(()=>validateGenerated({...v,category:'inexistente'},item,['cidades']));assert.equal(validateGenerated(v,{...item,title:'Suspeito de crime é preso'},['cidades']).sensitive,true);
 });
 test('fila persistida, publicação, revisão, duplicatas, pausa e quota de chamadas',async()=>{
  const dir=temporary(),db=openDatabase(dir);try{
@@ -36,7 +36,7 @@ test('fila persistida, publicação, revisão, duplicatas, pausa e quota de cham
   const source=db.prepare("SELECT * FROM automation_sources WHERE id='g1-tocantins'").get(),summary='A prefeitura anunciou serviços de transporte em Palmas para atender a população. '.repeat(4),entry={uid:'1',url:'https://g1.globo.com/to/noticia',title:'Transporte em Palmas terá nova organização',summary,originalAt:new Date().toISOString()};await ingest(db,source,[entry,entry]);assert.equal(db.prepare('SELECT COUNT(*) n FROM automation_items').get().n,1);
   const generate=async()=>({result:{title:'Novo transporte em Palmas',summary:'Serviços anunciados.',paragraphs:['A prefeitura anunciou serviços de transporte em Palmas.'],category:'cidades',city:'Palmas',tags:['Transporte'],sensitive:false,alerts:[]},usage:{input:20,output:30}});
   const options={readFeed:async()=>'<rss><channel><item><title>antigo</title></item></channel></rss>',generate,key:'test'};
-  await runAutomation(db,options);assert.equal(db.prepare('SELECT status FROM articles').get().status,'published');assert.equal((await tagsFor(db,1))[0].slug,'transporte');assert.equal(db.prepare('SELECT calls FROM automation_daily').get().calls,1);
+  await runAutomation(db,options);assert.equal(db.prepare('SELECT status FROM articles').get().status,'review');assert.deepEqual(JSON.parse(db.prepare('SELECT blockers FROM automation_items').get().blockers),['IMAGE_PENDING']);assert.equal((await tagsFor(db,1))[0].slug,'transporte');assert.equal(db.prepare('SELECT calls FROM automation_daily').get().calls,1);
   await ingest(db,source,[{...entry,summary:'Atualização '+summary}]);assert.match(db.prepare('SELECT note FROM automation_items').get().note,/atualizada/);assert.equal(db.prepare('SELECT title FROM articles').get().title,'Novo transporte em Palmas');
   db.prepare("UPDATE settings SET value='1' WHERE key='automation_paused'").run();assert.match((await runAutomation(db,options)).message,/pausada/);
   db.prepare('UPDATE automation_daily SET published=9,national=2').run();assert.equal(await reservePublication(db,false),true);assert.equal(await reservePublication(db,true),false);
@@ -56,6 +56,7 @@ test('painel de tags e automação exige editor; busca e página de tags preserv
     db.prepare("UPDATE articles SET status='review',body='<p>Texto preparado para revisão.</p>' WHERE id=?").run(id);
     db.prepare("UPDATE automation_items SET article_id=? WHERE id NOT IN ('item-0','item-18')").run(id);
     db.prepare("UPDATE automation_items SET note='Resumo insuficiente.' WHERE id='item-17'").run();
+    db.prepare("UPDATE automation_items SET policy_version=1,blockers='[]' WHERE state='review' AND article_id IS NOT NULL AND id<>'item-17'").run();
     const pending=await agent.get('/admin/automacao').expect(200);assert.match(pending.text,/Central de revisão/);assert.equal((pending.text.match(/class="automation-item"/g)||[]).length,15);assert.doesNotMatch(pending.text,/<h3>Conferência 18<\/h3>/);assert.doesNotMatch(pending.text,/Sem matéria criada/);assert.doesNotMatch(pending.text,/<h3>Conferência (0|17)<\/h3>/);
     const blocked=await agent.get('/admin/automacao?status=unprepared').expect(200);assert.equal((blocked.text.match(/class="automation-item"/g)||[]).length,2);assert.match(blocked.text,/<h3>Conferência 17<\/h3>/);
     const all=await agent.get('/admin/automacao?status=all&q=Confer%C3%AAncia%200').expect(200);assert.match(all.text,/Sem matéria criada/);
@@ -85,8 +86,8 @@ test('matérias desenvolvidas aceitam mais parágrafos e textos curtos exigem re
  const item={title:'Transporte em Palmas',summary:Array(10).fill(paragraph).join(' ')};
  const value={title:item.title,summary:'Detalhes do serviço de transporte.',paragraphs:Array(8).fill(paragraph),category:'cidades',city:'Palmas',tags:[],sensitive:false,alerts:[]};
  assert.equal(validateGenerated(value,item,['cidades']).alerts.length,0);
- assert.match(validateGenerated({...value,paragraphs:[paragraph]},item,['cidades']).alerts.join(' '),/pouco desenvolvido/);
- assert.match(validateGenerated({...value,paragraphs:[paragraph]},{...item,summary:paragraph},['cidades']).alerts.join(' '),/Material recebido curto/);
+ assert.match(validateGenerated({...value,paragraphs:[paragraph]},item,['cidades']).alerts.join(' '),/Texto curto/);
+ assert.match(validateGenerated({...value,paragraphs:[paragraph]},{...item,summary:paragraph},['cidades']).alerts.join(' '),/Texto curto/);
 });
 
 test('fila limita 20 itens, quatro nacionais e expira mais de 48 horas',async()=>{

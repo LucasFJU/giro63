@@ -1,6 +1,7 @@
+import {contentHash,parseCodes,issueLabels,pendingCodes,factIssues,imageEligible,publicationError} from './publication-policy.js';
 import {initializeEditorial} from './editorial-schema.js';
 import {mountTags,tagsFor,assignTags} from './tags.js';
-import {mountAutomation,reservePublication} from './automation.js';
+import {mountAutomation,reservePublication,event} from './automation.js';
 import { mountPortal } from './portal.js';
 import { openPostgres, transaction } from './postgres.js';
 import { cloudMedia } from './cloud-media.js';
@@ -25,7 +26,7 @@ const labels = {draft:'Rascunho',review:'Em revisão',published:'Publicado'};
 export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(root,'data'),uploadDir=path.join(root,'public','uploads'),seed=false,database=null,suggestedImageReader=readSuggestedImage,discoverArticleImage=discoverImage}={}) {
   const cloud=!!process.env.DATABASE_URL;
   const uploadLimitMb=cloud?4:8;
-  const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:uploadLimitMb*1024*1024,files:1,fields:45,fieldSize:250000}}).single('image');
+  const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:uploadLimitMb*1024*1024,files:1,fields:80,fieldSize:250000}}).single('image');
   if(process.env.VERCEL&&!cloud)throw Error('DATABASE_URL obrigatória na Vercel.');
   if(!cloud)mkdirSync(uploadDir,{recursive:true});
   const db=database||(cloud?openPostgres(process.env.DATABASE_URL):openDatabase(dataDir)); if(seed&&!cloud)seedDemo(db);
@@ -127,7 +128,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
     const id=Number(req.params.id);
     const a=Number.isSafeInteger(id)&&id>0?await db.prepare('SELECT * FROM articles WHERE id=?').get(id):null;
     if(!a){res.status(404).render('error',{title:'Matéria não encontrada',message:'Confira o endereço e volte ao painel.'});return null;}
-    if(res.locals.user.role!=='editor'&&(a.author_id!==res.locals.user.id||a.status==='published')){res.status(403).render('error',{title:'Acesso restrito',message:'Autores podem editar apenas suas próprias matérias ainda não publicadas.'});return null;}res.locals.sourceItem=await db.prepare('SELECT i.summary,i.url,i.note,s.name AS source_name FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.article_id=?').get(a.id);a.tags=(await tagsFor(db,a.id)).map(t=>t.name).join(', ');res.locals.articleTags=await tagsFor(db,a.id);res.locals.imageSuggestions=await db.prepare("SELECT * FROM article_image_suggestions WHERE article_id=? AND status='pending' ORDER BY created_at DESC").all(a.id);return a;
+    if(res.locals.user.role!=='editor'&&(a.author_id!==res.locals.user.id||a.status==='published')){res.status(403).render('error',{title:'Acesso restrito',message:'Autores podem editar apenas suas próprias matérias ainda não publicadas.'});return null;}res.locals.sourceItem=await db.prepare('SELECT i.*,s.name AS source_name FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.article_id=?').get(a.id);a.tags=(await tagsFor(db,a.id)).map(t=>t.name).join(', ');res.locals.articleTags=await tagsFor(db,a.id);res.locals.imageSuggestions=await db.prepare("SELECT * FROM article_image_suggestions WHERE article_id=? AND status='pending' ORDER BY created_at DESC").all(a.id);return a;
   };
   app.get('/admin/noticias/nova',(req,res)=>res.render('edit',{title:'Nova matéria',article:blankArticle(),error:''}));
   app.get('/admin/noticias/:id',async (req,res)=>{const article=(await findEditable(req,res));if(article)res.render('edit',{title:'Editar matéria',article,error:''});});
@@ -163,19 +164,19 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
   async function saveArticle(req,res,next) {
     const old=req.params.id?(await findEditable(req,res)):null;if(req.params.id&&!old)return;
     const isEditor=res.locals.user.role==='editor';
-    const desired=req.body.action||'draft';
+    const requested=req.body.action||'draft',desired=requested==='approve-publish'?'published':requested;
     const allowed=isEditor?['draft','review','published']:['draft','review'];
     if(!allowed.includes(desired))return res.status(403).render('error',{title:'Ação não permitida',message:'Apenas editores podem publicar matérias.'});
     const a={...blankArticle(),...old,tags:String(req.body.tags||'').slice(0,500),title:String(req.body.title||'').trim().slice(0,180),summary:String(req.body.summary||'').trim().slice(0,500),body:cleanBody(req.body.body),category:String(req.body.category||''),city:String(req.body.city||'').trim().slice(0,100),cover_alt:String(req.body.cover_alt??old?.cover_alt??'').trim().slice(0,250),credit:String(req.body.credit||'').trim().slice(0,250),sources:String(req.body.sources||'').trim().slice(0,3000),byline:isEditor?String(req.body.byline||'').trim().slice(0,100):res.locals.user.name,demo:req.body.demo==='on'?1:0,status:desired,featured:isEditor?Math.max(0,Math.min(4,Number.parseInt(req.body.featured)||0)):(old?.featured||0),urgent:isEditor&&req.body.urgent==='on'?1:(isEditor?0:(old?.urgent||0)),feedback:isEditor?String(req.body.feedback||'').slice(0,2000):(old?.feedback||'')};
     let photo;try{photo=photoValues(req.body,old||{});Object.assign(a,photo);}catch(error){Object.assign(a,Object.fromEntries(photoFields.map(key=>[key,String(req.body[key]??old?.[key]??'')])));return res.status(400).render('edit',{title:'Revise a imagem',article:a,error:'Confira o endereço HTTPS da fonte e os valores do recorte (0, 25, 50, 75 ou 100).'});}
     if(!a.title||!a.summary||!a.body.replace(/<[^>]*>/g,'').trim()||!res.locals.categories.some(c=>c[0]===a.category))return res.status(400).render('edit',{title:'Revise a matéria',article:a,error:'Preencha título, resumo, conteúdo e uma editoria válida.'});
     try {
-      let selected=null,file=req.file;
+      let selected=null,file=req.file;const approvalBody={...req.body,image_rights_confirmed:req.body.editorial_image_rights||req.body.image_rights_confirmed,image_context_confirmed:req.body.editorial_image_context||req.body.image_context_confirmed};
       if(req.body.image_suggestion){
         if(!isEditor)return res.status(403).render('error',{title:'Aprovação restrita',message:'Apenas editores podem aprovar imagens sugeridas.'});
         if(req.file)throw Error('Escolha uma sugestão ou um novo arquivo, não ambos.');
         selected=await db.prepare("SELECT * FROM article_image_suggestions WHERE id=? AND article_id=? AND status='pending'").get(String(req.body.image_suggestion),old?.id||0);if(!selected)throw Error('Sugestão indisponível. Reabra a matéria.');
-        checkImageApproval(req.body,photo,a.cover_alt);file={buffer:await suggestedImageReader(selected)};
+        checkImageApproval(approvalBody,photo,a.cover_alt);file={buffer:await suggestedImageReader(selected)};
       }
       if(photo.photo_photographer||photo.photo_source)a.credit=[photo.photo_photographer,photo.photo_source].filter(Boolean).join(' / ');
       if(req.file&&!a.credit)return res.status(400).render('edit',{title:'Crédito obrigatório',article:a,error:'Informe o crédito da imagem antes de enviar.'});
@@ -188,22 +189,57 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
         for(const [key,w,h] of [['photo_cover',1200,675],['photo_thumb',640,388],['photo_share',1200,630]])a[key]=await saveCrop(await cropImage(bytes,w,h,a.photo_x,a.photo_y));
       }
       const now=new Date().toISOString();
+      const importedItem=old?await db.prepare('SELECT i.*,s.approved AS source_approved,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.article_id=?').get(old.id):null;
+      let approvedCover=importedItem?.approved_cover||'';
+      if(importedItem&&['credit','cover_alt','photo_photographer','photo_source','photo_source_url','photo_license'].some(k=>a[k]!==old[k]))approvedCover='';
+      if(importedItem&&!isEditor&&(approvalBody.image_rights_confirmed==='on'||approvalBody.image_context_confirmed==='on'))return res.sendStatus(403);
+      if(importedItem&&(selected||approvalBody.image_rights_confirmed==='on'||approvalBody.image_context_confirmed==='on')){checkImageApproval(approvalBody,photo,a.cover_alt);approvedCover=a.cover;}
+      if(importedItem&&file&&!selected&&approvalBody.image_rights_confirmed!=='on')approvedCover='';
+      let blocks=[],pending=[],resolution='';
+      if(importedItem){
+        blocks=parseCodes(importedItem.blockers).filter(c=>c!=='IMAGE_PENDING');pending=parseCodes(importedItem.review_reasons);
+        const editorialText=(a.title+' '+a.summary+' '+a.body.replace(/<p>Conteúdo preparado[\s\S]*?<\/p>/g,'').replace(/<[^>]*>/g,' '));
+        if(importedItem.confirmed_hash!==contentHash(a))blocks=[...new Set([...blocks,...factIssues(editorialText,importedItem.title+' '+importedItem.summary)])];
+        if(a.city){const normalize=v=>v.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();const hay=' '+normalize(importedItem.title+' '+importedItem.summary).replace(/[^a-z0-9]+/g,' ')+' ',needle=' '+normalize(a.city).replace(/[^a-z0-9]+/g,' ')+' ';if(!hay.includes(needle)){a.city='';pending.push('CITY_ABSENT');}}
+        const resolved=[].concat(req.body.resolved_issues||[]).map(String),note=String(req.body.resolution_note||'').trim().slice(0,2000);
+        if(isEditor&&resolved.length&&note.length>=20){
+          const classified=String(req.body.classify_unknown||'');
+          if(blocks.includes('UNKNOWN_ALERT')&&Object.hasOwn(issueLabels,classified)&&classified!=='UNKNOWN_ALERT'&&classified!=='LEGACY_REVIEW'){
+            blocks=blocks.filter(c=>c!=='UNKNOWN_ALERT');if(pendingCodes.has(classified))pending.push(classified);else blocks.push(classified);
+          }
+          const cleared=blocks.filter(c=>c!=='UNKNOWN_ALERT'&&Object.hasOwn(issueLabels,c)&&resolved.includes(c));
+          blocks=blocks.filter(c=>!cleared.includes(c));resolution=note+' · códigos conferidos: '+cleared.join(', ')+(classified?' · classificação: '+classified:'');
+        }
+        if(!importedItem.source_approved)blocks.push('SOURCE_UNAUTHORIZED');
+        if(!imageEligible(a,approvedCover))blocks.push('IMAGE_PENDING');
+        blocks=[...new Set(blocks)];pending=[...new Set(pending)];
+        res.locals.sourceItem={...res.locals.sourceItem,blockers:JSON.stringify(blocks)};
+        if(desired==='published'&&blocks.length)throw publicationError('Publicação bloqueada: '+blocks.map(c=>issueLabels[c]||issueLabels.UNKNOWN_ALERT).join('; ')+'. Salve o rascunho ou conclua as conferências indicadas.');
+      }
       let slug=old?.slug||slugify(a.title)||'materia';
       if(!old){let n=1;const base=slug;while((await db.prepare('SELECT id FROM articles WHERE slug=?').get(slug)))slug=base+'-'+(++n);}
       await transaction(db,async()=>{
         if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
         if(a.featured>0&&desired==='published')(await db.prepare('UPDATE articles SET featured=0 WHERE featured=? AND id<>?').run(a.featured,old?.id||0));
-        if(desired==='published'&&old?.status!=='published'){const imported=old?await db.prepare('SELECT i.id,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.article_id=? AND i.state<>?').get(old.id,'published'):null;if(imported){if(!await reservePublication(db,imported.region==='regional'))throw Error('Limite diário de publicações automáticas atingido.');await db.prepare("UPDATE automation_items SET state='published' WHERE id=?").run(imported.id);}}
+        if(importedItem){
+          const current=await db.prepare('SELECT * FROM automation_items WHERE id=?'+(db.dialect==='postgres'?' FOR UPDATE':'')).get(importedItem.id);
+          const latest=await db.prepare('SELECT updated_at FROM articles WHERE id=?').get(old.id);if(latest.updated_at!==old.updated_at)throw publicationError('A matéria foi alterada por outro editor. Reabra antes de publicar; seu texto está preservado neste formulário.');
+          const source=await db.prepare('SELECT approved FROM automation_sources WHERE id=?').get(current.source_id);if(desired==='published'&&!source.approved)throw publicationError('Fonte sem autorização de reutilização.');
+          if(desired==='published'&&!Number(current.publication_counted)&&!await reservePublication(db,importedItem.region==='regional'))throw publicationError('Limite diário atingido: até 10 publicações e 3 nacionais. A matéria foi preservada para a próxima publicação.');
+          await db.prepare('UPDATE automation_items SET state=?,policy_version=1,blockers=?,review_reasons=?,review_pending=?,approved_cover=?,publication_counted=?,reviewed_by=?,reviewed_at=?,resolution_note=?,confirmed_hash=? WHERE id=?').run(desired==='published'?'published':'review',JSON.stringify(blocks),JSON.stringify(pending),pending.length&&(current.review_pending||old?.status!=='published'||contentHash(old)!==contentHash(a))?1:0,approvedCover,desired==='published'?1:Number(current.publication_counted),resolution?res.locals.user.id:current.reviewed_by,resolution?now:current.reviewed_at,resolution||current.resolution_note,resolution?contentHash(a):current.confirmed_hash,importedItem.id);
+          if(resolution)await event(db,'Conferência prévia: '+importedItem.id+' · editor '+res.locals.user.id+' · '+resolution);
+          if(desired==='published')await event(db,'Publicação aprovada: '+importedItem.id+' · editor '+res.locals.user.id+(pending.length?' · pendências: '+pending.join(', '):''));
+        }
         const values=[a.title,a.summary,a.body,a.category,a.city,a.byline,a.cover,a.cover_alt,a.credit,a.sources,a.status,a.featured,a.urgent,a.demo,a.feedback,now,desired==='published'?(old?.published_at||now):old?.published_at||null];
         if(old)(await db.prepare('UPDATE articles SET title=?,summary=?,body=?,category=?,city=?,byline=?,cover=?,cover_alt=?,credit=?,sources=?,status=?,featured=?,urgent=?,demo=?,feedback=?,updated_at=?,published_at=? WHERE id=?').run(...values,old.id));
         else (await db.prepare('INSERT INTO articles(title,summary,body,category,city,byline,cover,cover_alt,credit,sources,status,featured,urgent,demo,feedback,updated_at,published_at,slug,author_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(...values,slug,res.locals.user.id,now));
         const taggedId=old?.id||(await db.prepare('SELECT id FROM articles WHERE slug=?').get(slug)).id;await db.prepare('DELETE FROM article_tags WHERE article_id=?').run(taggedId);await assignTags(db,taggedId,a.tags);
         await db.prepare('UPDATE articles SET photo_photographer=?,photo_source=?,photo_source_url=?,photo_license=?,photo_caption=?,photo_x=?,photo_y=?,photo_cover=?,photo_thumb=?,photo_share=? WHERE id=?').run(a.photo_photographer,a.photo_source,a.photo_source_url,a.photo_license,a.photo_caption,a.photo_x,a.photo_y,a.photo_cover||'',a.photo_thumb||'',a.photo_share||'',taggedId);
-        if(selected){const approved=await db.prepare("UPDATE article_image_suggestions SET status='approved',reviewed_by=?,reviewed_at=? WHERE id=? AND status='pending'").run(res.locals.user.id,now,selected.id);if(!approved.changes)throw Error('Sugestão já revisada por outro editor. Reabra a matéria.');}
+        if(selected){const approved=await db.prepare("UPDATE article_image_suggestions SET status='approved',reviewed_by=?,reviewed_at=?,photographer=?,source=?,license=?,caption=?,alt=? WHERE id=? AND status='pending'").run(res.locals.user.id,now,photo.photo_photographer,photo.photo_source,photo.photo_license,photo.photo_caption,a.cover_alt,selected.id);if(!approved.changes)throw Error('Sugestão já revisada por outro editor. Reabra a matéria.');}
       });
       const savedId=old?.id||(await db.prepare('SELECT id FROM articles WHERE slug=?').get(slug)).id;
       flash(req,desired==='published'?'Matéria publicada no portal.':desired==='review'?'Matéria enviada para revisão.':'Rascunho salvo.');res.redirect(desired==='draft'?'/admin/noticias/'+savedId:'/admin/materias');
-    }catch(e){if(/sugestão|sugestões|aprovar|recortes|armazenar|ler a imagem/i.test(e.message))return res.status(400).render('edit',{title:'Revise a imagem',article:{...a,cover:old?.cover||'',photo_cover:old?.photo_cover||'',photo_thumb:old?.photo_thumb||'',photo_share:old?.photo_share||''},error:e.message});if(/image|Input|format|JPG|pixels|unsupported|corrupt/i.test(e.message))return res.status(400).render('edit',{title:'Verifique a imagem',article:{...a,cover:old?.cover||''},error:'Imagem inválida. Use JPG, PNG ou WebP estático dentro dos limites informados.'});next(e);}
+    }catch(e){if(e.publication)return res.status(400).render('edit',{title:'Revise a publicação',article:{...a,cover:old?.cover||'',photo_cover:old?.photo_cover||'',photo_thumb:old?.photo_thumb||'',photo_share:old?.photo_share||''},error:e.message+' Selecione novamente qualquer arquivo ainda não salvo.'});if(/sugestão|sugestões|aprovar|recortes|armazenar|ler a imagem/i.test(e.message))return res.status(400).render('edit',{title:'Revise a imagem',article:{...a,cover:old?.cover||'',photo_cover:old?.photo_cover||'',photo_thumb:old?.photo_thumb||'',photo_share:old?.photo_share||''},error:e.message});if(/image|Input|format|JPG|pixels|unsupported|corrupt/i.test(e.message))return res.status(400).render('edit',{title:'Verifique a imagem',article:{...a,cover:old?.cover||''},error:'Imagem inválida. Use JPG, PNG ou WebP estático dentro dos limites informados.'});next(e);}
   }
   app.post('/admin/noticias',articleUpload,checkCsrf,saveArticle);
   app.post('/admin/noticias/:id',articleUpload,checkCsrf,saveArticle);

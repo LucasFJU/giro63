@@ -1,3 +1,4 @@
+export const reviewColumns={confirmed_hash:"TEXT NOT NULL DEFAULT ''",review_completed_by:'INTEGER REFERENCES users(id)',review_completed_at:"TEXT NOT NULL DEFAULT ''",policy_version:"INTEGER NOT NULL DEFAULT 0",blockers:`TEXT NOT NULL DEFAULT '["LEGACY_REVIEW"]'`,review_reasons:"TEXT NOT NULL DEFAULT '[]'",review_pending:'INTEGER NOT NULL DEFAULT 0',reviewed_by:'INTEGER REFERENCES users(id)',reviewed_at:"TEXT NOT NULL DEFAULT ''",resolution_note:"TEXT NOT NULL DEFAULT ''",approved_cover:"TEXT NOT NULL DEFAULT ''",publication_counted:'INTEGER NOT NULL DEFAULT 0'};
 export const editorialSchema=`
 CREATE TABLE IF NOT EXISTS tags(slug TEXT PRIMARY KEY,name TEXT NOT NULL,normalized TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS article_tags(article_id INTEGER NOT NULL REFERENCES articles(id),tag_slug TEXT NOT NULL REFERENCES tags(slug),PRIMARY KEY(article_id,tag_slug));
@@ -15,7 +16,11 @@ export const initialSources=[
   ['agencia-tocantins','Agência Tocantins','https://www.agenciatocantins.com.br','','www.agenciatocantins.com.br,agenciatocantins.com.br','regional']
 ];
 export async function initializeEditorial(db){
-  if(db.dialect!=='postgres')await db.exec(editorialSchema);
+  if(db.dialect!=='postgres'){
+    await db.exec(editorialSchema);
+    const columns=new Set((await db.prepare('PRAGMA table_info(automation_items)').all()).map(c=>c.name));
+    for(const [name,type] of Object.entries(reviewColumns))if(!columns.has(name)){await db.exec('ALTER TABLE automation_items ADD COLUMN '+name+' '+type);if(name==='publication_counted')await db.prepare("UPDATE automation_items SET publication_counted=1 WHERE state='published'").run();}
+  }
   for(const [id,name,website,feed,hosts,region] of initialSources)await db.prepare('INSERT INTO automation_sources(id,name,website,feed,hosts,region) VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING').run(id,name,website,feed,hosts,region);
   for(const [key,value] of [['automation_paused','1'],['automation_publish','0']])await db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO NOTHING').run(key,value);
 }

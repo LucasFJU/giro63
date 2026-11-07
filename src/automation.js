@@ -1,3 +1,4 @@
+import {insufficientFacts,parseCodes,splitIssues,issueLabels,sourceFooter} from './publication-policy.js';
 import {authorizeWorkflow} from './workflow-auth.js';
 import {createHash,randomUUID,timingSafeEqual} from 'node:crypto';
 import {transaction} from './postgres.js';
@@ -19,13 +20,14 @@ export async function ingest(db,source,entries,now=Date.now()){
     if(isVideoEntry(entry))continue;
     const fingerprint=hash((entry.title+' '+entry.summary).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,''));
     const old=await db.prepare('SELECT * FROM automation_items WHERE (source_id=? AND uid=?) OR url=?').get(source.id,entry.uid,entry.url);
-    if(old){if(old.fingerprint!==fingerprint){await db.prepare('UPDATE automation_items SET note=?,updated_at=? WHERE id=?').run('Fonte atualizada: conferir a origem. Texto editorial preservado.',new Date(now).toISOString(),old.id);}continue;}
+    if(old){if(old.fingerprint!==fingerprint){const pending=[...new Set([...parseCodes(old.review_reasons),'SOURCE_UPDATED'])];await db.prepare('UPDATE automation_items SET note=?,review_reasons=?,review_pending=1,updated_at=? WHERE id=?').run('Fonte atualizada: conferir a origem. Texto editorial preservado.',JSON.stringify(pending),new Date(now).toISOString(),old.id);}continue;}
     const candidates=await db.prepare('SELECT title,fingerprint FROM automation_items WHERE original_at>=?').all(new Date(now-48*3600000).toISOString());
     const words=new Set(slugify(entry.title).split('-').filter(w=>w.length>3));
     const duplicate=candidates.some(x=>{const other=new Set(slugify(x.title).split('-').filter(w=>w.length>3)),shared=[...words].filter(w=>other.has(w)).length;return x.fingerprint===fingerprint||words.size>=4&&shared/Math.max(words.size,other.size)>=0.75;});
     const partner=/Reuters|France.Presse|Associated Press|Agência Lusa|\bAFP\b/i.test(entry.summary);
-    const state=entry.summary.length<180||duplicate||partner?'review':'queued',note=entry.summary.length<180?'Resumo insuficiente.':partner?'Conteúdo parceiro: confirmar permissão específica de reutilização.':duplicate?'Possível duplicata entre fontes.':'';
-    await db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,note,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').run(randomUUID(),source.id,entry.uid,entry.url,entry.title,entry.summary,fingerprint,entry.originalAt,state,note,new Date(now).toISOString());
+    const codes=[...(insufficientFacts(entry.summary)?['INSUFFICIENT_FACTS']:[]),...(partner?['SOURCE_UNAUTHORIZED']:[]),...(duplicate?['DUPLICATE']:[])];
+    const state=insufficientFacts(entry.summary)||duplicate||partner?'review':'queued',note=insufficientFacts(entry.summary)?'Resumo insuficiente.':partner?'Conteúdo parceiro: confirmar permissão específica de reutilização.':duplicate?'Possível duplicata entre fontes.':'';
+    await db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,note,updated_at,policy_version,blockers) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').run(randomUUID(),source.id,entry.uid,entry.url,entry.title,entry.summary,fingerprint,entry.originalAt,state,note,new Date(now).toISOString(),1,JSON.stringify(codes));
   }
 }
 export function automationPriority(item,now=Date.now()){
@@ -82,17 +84,21 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
       });if(!claimed)break;
       try{
         const {result,usage}=await generate(item,categories);await db.prepare('UPDATE automation_daily SET input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE day=?').run(usage.input,usage.output,day);
-        let suggestedImage=null;if(['agencia-brasil','g1-tocantins'].includes(item.source_id)&&Date.now()<deadline-9000){try{suggestedImage=await discoverImage(item.url);}catch{/* Keep the approved neutral art if image discovery fails. */}}
+        let suggestedImage=null;if(['agencia-brasil','g1-tocantins'].includes(item.source_id)&&Date.now()<deadline-9000){try{suggestedImage=await discoverImage(item.url);}catch{/* Missing images remain blocked until an editor approves a real image. */}}
         await transaction(db,async()=>{
           const permitted=await db.prepare('SELECT active,approved FROM automation_sources WHERE id=?').get(item.source_id),pause=await db.prepare("SELECT value FROM settings WHERE key='automation_paused'").get(),publishing=await db.prepare("SELECT value FROM settings WHERE key='automation_publish'").get();
-          const publish=publishing.value==='1'&&pause.value==='0'&&permitted.active&&permitted.approved&&!result.sensitive&&!result.alerts.length&&await reservePublication(db,item.region==='regional',now);
-          const stamp=new Date(now).toISOString(),slug=(slugify(result.title).slice(0,100)||'noticia')+'-'+item.id.slice(0,8),body=result.paragraphs.map(p=>'<p>'+escape(p)+'</p>').join('')+'<p>Conteúdo preparado com auxílio de inteligência artificial, a partir de informações de '+escape(item.source_name)+'. <a href="'+escape(item.url)+'">Leia a publicação original</a>.</p>';
+          const issues=result.issues||splitIssues([...(result.alerts.length?['UNKNOWN_ALERT']:[]),...(result.sensitive?['SENSITIVE']:[]),...(result.tags.length?['TAGS']:[]),...(!result.city?['CITY_ABSENT']:[])]);
+          issues.pending=[...new Set([...issues.pending,...parseCodes(item.review_reasons)])];
+          if(!permitted.approved)issues.blockers.push('SOURCE_UNAUTHORIZED');
+          // A new suggestion has no image authorization. Never publish neutral art instead.
+          issues.blockers.push('IMAGE_PENDING');const publish=false;
+          const stamp=new Date(now).toISOString(),slug=(slugify(result.title).slice(0,100)||'noticia')+'-'+item.id.slice(0,8),body=result.paragraphs.map(p=>'<p>'+escape(p)+'</p>').join('')+sourceFooter(item.source_name,item.url);
           const saved=await db.prepare('INSERT INTO articles(slug,title,summary,body,category,city,byline,cover,cover_alt,credit,sources,status,created_at,updated_at,published_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(slug,result.title,result.summary,body,result.category,result.city,'Giro63 - Redação','/images/og-giro63.png','Arte ilustrativa com a marca Giro63','Arte ilustrativa Giro63',item.source_name+' — '+item.url,publish?'published':'review',stamp,stamp,publish?stamp:null);
           await assignTags(db,saved.lastInsertRowid,result.tags);
           await addImageSuggestion(db,saved.lastInsertRowid,suggestedImage);
-          await db.prepare('UPDATE automation_items SET state=?,article_id=?,note=?,updated_at=? WHERE id=?').run(publish?'published':'review',saved.lastInsertRowid,result.alerts.join(' · ')||(result.sensitive?'Tema sensível: revisão editorial obrigatória.':publish?'Publicado automaticamente.':'Publicação automática pausada ou quota atingida.'),stamp,item.id);
+          await db.prepare('UPDATE automation_items SET state=?,article_id=?,note=?,updated_at=?,policy_version=1,blockers=?,review_reasons=?,review_pending=? WHERE id=?').run('review',saved.lastInsertRowid,[...result.alerts,...issues.blockers.map(c=>issueLabels[c]||issueLabels.UNKNOWN_ALERT)].join(' · '),stamp,JSON.stringify([...new Set(issues.blockers)]),JSON.stringify(issues.pending),issues.pending.length?1:0,item.id);
         });processed++;
-      }catch(error){await db.prepare('UPDATE automation_items SET state=?,note=?,updated_at=? WHERE id=?').run(item.attempts+1>=2?'review':'failed',/Gemini|JSON|Campos|Texto/.test(error.message)?error.message.slice(0,200):error.name==='TimeoutError'?'Gemini excedeu o prazo de 35 segundos.':'Falha no processamento. Nova tentativa limitada.',new Date(now).toISOString(),item.id);}
+      }catch(error){await db.prepare('UPDATE automation_items SET state=?,note=?,updated_at=?,policy_version=1,blockers=? WHERE id=?').run(item.attempts+1>=2?'review':'failed',/Gemini|JSON|Campos|Texto/.test(error.message)?error.message.slice(0,200):error.name==='TimeoutError'?'Gemini excedeu o prazo de 35 segundos.':'Falha no processamento. Nova tentativa limitada.',new Date(now).toISOString(),JSON.stringify(['GENERATION_FAILED']),item.id);}
     }
     await event(db,'Execução concluída. Itens processados: '+processed,now);return {message:'Execução concluída.',processed};
   }finally{await db.prepare('DELETE FROM automation_lock WHERE id=? AND owner=?').run('runner',owner);}
@@ -100,28 +106,46 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
 export function mountAutomation(app,{db,requireUser,editor,checkCsrf}){
   app.get('/admin/automacao',requireUser,editor,async(req,res)=>{
     await trimAutomationQueue(db);
-    const filter=['pending','unprepared','queued','published','discarded','all'].includes(req.query.status)?req.query.status:'pending';
+    const filter=['pending','unprepared','queued','published','published-review','discarded','all'].includes(req.query.status)?req.query.status:'pending';
     const q=String(req.query.q||'').trim().slice(0,100),sourceFilter=String(req.query.source||'').slice(0,100),conditions=[],params=[];
-    const ready="i.state='review' AND EXISTS (SELECT 1 FROM articles a WHERE a.id=i.article_id AND a.status='review' AND trim(a.body)<>'') AND "+['resumo insuficiente','material recebido curto','pouco desenvolvido','duplic','permiss','restricao de uso','falha na gera'].map(term=>"normalize_search(i.note) NOT LIKE '%"+term+"%'").join(' AND ');
+    const ready=`i.state='review' AND EXISTS (SELECT 1 FROM articles a WHERE a.id=i.article_id AND a.status IN ('review','draft') AND trim(a.body)<>'') AND i.policy_version=1 AND i.blockers IN ('[]','["IMAGE_PENDING"]')`;
     const readyCount=Number((await db.prepare('SELECT count(*) AS n FROM automation_items i WHERE '+ready).get()).n);
-    if(filter==='pending')conditions.push('('+ready+')');else if(filter==='unprepared')conditions.push("i.state IN ('review','failed') AND NOT ("+ready+")");else if(filter==='queued')conditions.push("i.state IN ('queued','processing')");else if(filter!=='all'){conditions.push('i.state=?');params.push(filter);}
+    if(filter==='published-review')conditions.push("i.review_pending=1 AND EXISTS (SELECT 1 FROM articles a WHERE a.id=i.article_id AND a.status='published')");else if(filter==='pending')conditions.push('('+ready+')');else if(filter==='unprepared')conditions.push("i.state IN ('review','failed') AND NOT ("+ready+")");else if(filter==='queued')conditions.push("i.state IN ('queued','processing')");else if(filter!=='all'){conditions.push('i.state=?');params.push(filter);}
     if(q){conditions.push("(normalize_search(i.title) LIKE normalize_search(?) ESCAPE '!' OR normalize_search(s.name) LIKE normalize_search(?) ESCAPE '!')");const term='%'+q.replace(/[!%_]/g,'!$&')+'%';params.push(term,term);}
     if(sourceFilter){conditions.push('i.source_id=?');params.push(sourceFilter);}
     const where=conditions.length?conditions.join(' AND '):'1=1',join='FROM automation_items i JOIN automation_sources s ON s.id=i.source_id';
     const total=(await db.prepare('SELECT count(*) AS n '+join+' WHERE '+where).get(...params)).n,page=Math.min(Math.max(1,Number.parseInt(req.query.page)||1),Math.max(1,Math.ceil(total/15)));
     const counts=Object.fromEntries((await db.prepare('SELECT state,count(*) AS n FROM automation_items GROUP BY state').all()).map(x=>[x.state,Number(x.n)]));
+    counts.publishedReview=Number((await db.prepare("SELECT count(*) AS n FROM automation_items i JOIN articles a ON a.id=i.article_id WHERE a.status='published' AND i.review_pending=1").get()).n);
     const queueLink=(status=filter,n=1)=>{const query=new URLSearchParams({status});if(q)query.set('q',q);if(sourceFilter)query.set('source',sourceFilter);if(n>1)query.set('page',String(n));return '/admin/automacao?'+query.toString()+'#automation-queue';};
-    res.render('automation',{title:'Automação editorial',error:'',configured:!!process.env.GEMINI_API_KEY,model:process.env.GEMINI_MODEL||'gemini-3.7-flash',sources:await db.prepare('SELECT * FROM automation_sources ORDER BY name').all(),items:await db.prepare('SELECT i.*,s.name AS source_name '+join+' WHERE '+where+' ORDER BY i.updated_at DESC,i.id LIMIT 15 OFFSET ?').all(...params,(page-1)*15),events:await db.prepare('SELECT * FROM automation_events ORDER BY created_at DESC LIMIT 20').all(),daily:await db.prepare('SELECT * FROM automation_daily WHERE day=?').get(dayInSaoPaulo())||{calls:0,published:0,national:0,input_tokens:0,output_tokens:0},filter,q,sourceFilter,total,page,pages:Math.ceil(total/15),counts,readyCount,queueLink});
+    res.render('automation',{title:'Automação editorial',error:'',configured:!!process.env.GEMINI_API_KEY,model:process.env.GEMINI_MODEL||'gemini-3.7-flash',sources:await db.prepare('SELECT * FROM automation_sources ORDER BY name').all(),issueLabels,parseCodes,items:await db.prepare('SELECT i.*,s.name AS source_name '+join+' WHERE '+where+' ORDER BY i.updated_at DESC,i.id LIMIT 15 OFFSET ?').all(...params,(page-1)*15),events:await db.prepare('SELECT * FROM automation_events ORDER BY created_at DESC LIMIT 20').all(),daily:await db.prepare('SELECT * FROM automation_daily WHERE day=?').get(dayInSaoPaulo())||{calls:0,published:0,national:0,input_tokens:0,output_tokens:0},filter,q,sourceFilter,total,page,pages:Math.ceil(total/15),counts,readyCount,queueLink});
   });
   app.post('/admin/automacao/descartar-varios',requireUser,editor,checkCsrf,async(req,res)=>{
     const ids=[...new Set([].concat(req.body.items||[]).map(String))].slice(0,100);
     if(req.body.scope==='all'&&req.body.confirm_all!=='on')return res.sendStatus(400);
     await transaction(db,async()=>{
       if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
-      const eligible="state IN ('review','failed') AND (article_id IS NULL OR NOT EXISTS (SELECT 1 FROM articles a WHERE a.id=automation_items.article_id AND a.status='review' AND trim(a.body)<>'' ) OR "+['resumo insuficiente','material recebido curto','pouco desenvolvido','duplic','permiss','restricao de uso','falha na gera'].map(t=>"normalize_search(note) LIKE '%"+t+"%'").join(' OR ')+")";
+      const eligible=`state IN ('review','failed') AND NOT (policy_version=1 AND blockers IN ('[]','["IMAGE_PENDING"]') AND EXISTS (SELECT 1 FROM articles a WHERE a.id=automation_items.article_id AND a.status IN ('review','draft') AND trim(a.body)<>''))`;
       if(req.body.scope==='all'||ids.length)await db.prepare("UPDATE automation_items SET state='discarded',note='Descartado em lote pela redação.',updated_at=? WHERE "+eligible+(req.body.scope==='all'?'':' AND id IN ('+ids.map(()=>'?').join(',')+')')).run(new Date().toISOString(),...(req.body.scope==='all'?[]:ids));
     });
     req.session.flash='Itens não preparados descartados. Matérias vinculadas foram preservadas.';res.redirect('/admin/automacao?status=unprepared');
+  });
+  app.post('/admin/automacao/itens/:id/concluir',requireUser,editor,checkCsrf,async(req,res)=>{
+    await transaction(db,async()=>{
+      if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
+      const item=await db.prepare("SELECT i.* FROM automation_items i JOIN articles a ON a.id=i.article_id WHERE i.id=? AND a.status='published' AND i.review_pending=1").get(req.params.id);
+      if(!item)return;
+      const stamp=new Date().toISOString();await db.prepare('UPDATE automation_items SET review_pending=0,review_completed_by=?,review_completed_at=? WHERE id=?').run(res.locals.user.id,stamp,item.id);
+      await event(db,'Conferência concluída: '+item.id+' · editor '+res.locals.user.id);
+    });res.redirect('/admin/automacao?status=published-review');
+  });
+  app.post('/admin/automacao/itens/:id/retirar',requireUser,editor,checkCsrf,async(req,res)=>{
+    await transaction(db,async()=>{
+      if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
+      const item=await db.prepare('SELECT article_id FROM automation_items WHERE id=?').get(req.params.id);if(!item)return;
+      await db.prepare("UPDATE articles SET status='draft',featured=0,updated_at=? WHERE id=?").run(new Date().toISOString(),item.article_id);
+      await db.prepare("UPDATE automation_items SET state='review' WHERE id=?").run(req.params.id);await event(db,'Retirada de publicação: '+req.params.id+' · editor '+res.locals.user.id);
+    });res.redirect('/admin/automacao?status=published-review');
   });
   app.post('/admin/automacao/config',requireUser,editor,checkCsrf,async(req,res)=>{await transaction(db,async()=>{await db.prepare("UPDATE settings SET value=? WHERE key='automation_paused'").run(req.body.enabled==='on'?'0':'1');await db.prepare("UPDATE settings SET value=? WHERE key='automation_publish'").run(req.body.publish==='on'?'1':'0');});res.redirect('/admin/automacao');});
   app.post('/admin/automacao/fontes/:id',requireUser,editor,checkCsrf,async(req,res)=>{
