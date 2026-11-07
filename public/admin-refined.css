@@ -6,3 +6,17 @@
 .admin-body .admin-main .field-help{font-size:12px}.admin-body .admin-main .admin-article-cell strong{font-size:14px}.admin-body .admin-main td{font-size:13px}.admin-body .admin-main .table-subtitle{font-size:12px}.admin-body .admin-main .automation-tabs{flex-wrap:wrap;overflow:visible}.admin-body .admin-main .automation-item-main{min-width:0}.admin-body .admin-main .automation-item h3{overflow-wrap:anywhere}
 
 .directory-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 16px;background:white;border-bottom:1px solid #dce3ea;min-width:0}.directory-row strong{overflow-wrap:anywhere}.directory-editor{padding:16px;background:#eef3f7}.article-row-actions{display:flex;gap:12px;flex-wrap:wrap;align-items:center}.article-row-actions form{margin:0}.article-row-actions button{min-height:44px}.admin-body .admin-main .directory-editor form{margin:0}
+
+/* Ações da matéria: controles consistentes em todas as linhas e com foco visível. */
+.admin-body .admin-main .article-row-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:245px}
+.admin-body .admin-main .article-row-actions form{display:contents}
+.admin-body .admin-main .article-row-actions .form-progress:empty{display:none}
+.admin-body .admin-main .article-action{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-height:38px;padding:8px 12px;border:1px solid #c8d5df;border-radius:7px;background:#fff;color:#102a43;font:600 12px/1.2 var(--sans);text-decoration:none;white-space:nowrap;cursor:pointer;transition:background-color .15s,border-color .15s,color .15s}
+.admin-body .admin-main .article-action:hover{background:#edf3f7;border-color:#7891a4}
+.admin-body .admin-main .article-action:focus-visible{outline:3px solid #ed521a;outline-offset:2px}
+.admin-body .admin-main .article-action-edit,.admin-body .admin-main .article-action-restore{background:#102a43;color:#fff;border-color:#102a43}
+.admin-body .admin-main .article-action-edit:hover,.admin-body .admin-main .article-action-restore:hover{background:#1f4e5f;border-color:#1f4e5f}
+.admin-body .admin-main .article-action-excluir{color:#a32920;border-color:#e6c6c2}
+.admin-body .admin-main .article-action-excluir:hover{background:#fff3f1;border-color:#b74338}
+.admin-body .admin-main .article-row-actions .form-progress:not(:empty){flex-basis:100%;font-size:12px}
+@media(max-width:900px){.admin-body .admin-main .article-row-actions{min-width:0}.admin-body .admin-main .article-action{min-height:44px;padding-inline:14px}}
