@@ -69,6 +69,12 @@ test('painel de tags e automação exige editor; busca e página de tags preserv
     const second=await agent.get('/admin/automacao?status=pending&page=2').expect(200);assert.equal((second.text.match(/class="automation-item"/g)||[]).length,1);
     const search=await agent.get('/admin/automacao?status=published&q=CONFERENCIA%2018&source=agencia-brasil').expect(200);assert.equal((search.text.match(/class="automation-item"/g)||[]).length,1);assert.match(search.text,/<h3>Conferência 18<\/h3>/);
     const empty=await agent.get('/admin/automacao?status=discarded').expect(200);assert.match(empty.text,/Nenhum item encontrado/);
+    await agent.post('/admin/automacao/descartar-varios').type('form').send({_csrf:token,scope:'selected',items:['item-17','item-1','item-18']}).expect(302);
+    assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='item-17'").get().state,'discarded');assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='item-1'").get().state,'review');assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='item-18'").get().state,'published');
+    await agent.post('/admin/automacao/descartar-varios').type('form').send({_csrf:token,scope:'all'}).expect(400);
+    await agent.post('/admin/automacao/descartar-varios').type('form').send({_csrf:token,scope:'all',confirm_all:'on'}).expect(302);
+    assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='item-0'").get().state,'discarded');assert.equal(db.prepare('SELECT status FROM articles WHERE id=?').get(draftId).status,'draft');
+
    }
   }
  }finally{db.close();rmSync(dir,{recursive:true,force:true});}

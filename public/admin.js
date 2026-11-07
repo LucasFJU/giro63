@@ -11,3 +11,6 @@ if(editorForm){let dirty=false;const feedback=document.querySelector('.editor-fe
  const rich=document.querySelector('#body-editor'),wordCount=document.createElement('p');wordCount.className='field-help';rich.after(wordCount);const count=()=>{const words=(rich.innerText||'').trim().split(/\s+/).filter(Boolean).length;wordCount.textContent=words+' palavras · aproximadamente '+Math.max(1,Math.ceil(words/200))+' min de leitura';};rich.addEventListener('input',count);count();
 
 }
+
+const bulkSelect=document.getElementById('bulk-select-page');
+if(bulkSelect){const items=[...document.querySelectorAll('[data-bulk-item]')];bulkSelect.addEventListener('change',()=>items.forEach(i=>i.checked=bulkSelect.checked));items.forEach(i=>i.addEventListener('change',()=>{bulkSelect.checked=items.every(i=>i.checked);bulkSelect.indeterminate=items.some(i=>i.checked)&&!bulkSelect.checked;}));}

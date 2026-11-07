@@ -78,6 +78,16 @@ export function mountAutomation(app,{db,requireUser,editor,checkCsrf}){
     const queueLink=(status=filter,n=1)=>{const query=new URLSearchParams({status});if(q)query.set('q',q);if(sourceFilter)query.set('source',sourceFilter);if(n>1)query.set('page',String(n));return '/admin/automacao?'+query.toString()+'#automation-queue';};
     res.render('automation',{title:'Automação editorial',error:'',configured:!!process.env.GEMINI_API_KEY,model:process.env.GEMINI_MODEL||'gemini-3.7-flash',sources:await db.prepare('SELECT * FROM automation_sources ORDER BY name').all(),items:await db.prepare('SELECT i.*,s.name AS source_name '+join+' WHERE '+where+' ORDER BY i.updated_at DESC,i.id LIMIT 15 OFFSET ?').all(...params,(page-1)*15),events:await db.prepare('SELECT * FROM automation_events ORDER BY created_at DESC LIMIT 20').all(),daily:await db.prepare('SELECT * FROM automation_daily WHERE day=?').get(dayInSaoPaulo())||{calls:0,published:0,national:0,input_tokens:0,output_tokens:0},filter,q,sourceFilter,total,page,pages:Math.ceil(total/15),counts,readyCount,queueLink});
   });
+  app.post('/admin/automacao/descartar-varios',requireUser,editor,checkCsrf,async(req,res)=>{
+    const ids=[...new Set([].concat(req.body.items||[]).map(String))].slice(0,100);
+    if(req.body.scope==='all'&&req.body.confirm_all!=='on')return res.sendStatus(400);
+    await transaction(db,async()=>{
+      if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
+      const eligible="state IN ('review','failed') AND (article_id IS NULL OR NOT EXISTS (SELECT 1 FROM articles a WHERE a.id=automation_items.article_id AND a.status='review' AND trim(a.body)<>'' ) OR "+['resumo insuficiente','material recebido curto','pouco desenvolvido','duplic','permiss','restricao de uso','falha na gera'].map(t=>"normalize_search(note) LIKE '%"+t+"%'").join(' OR ')+")";
+      if(req.body.scope==='all'||ids.length)await db.prepare("UPDATE automation_items SET state='discarded',note='Descartado em lote pela redação.',updated_at=? WHERE "+eligible+(req.body.scope==='all'?'':' AND id IN ('+ids.map(()=>'?').join(',')+')')).run(new Date().toISOString(),...(req.body.scope==='all'?[]:ids));
+    });
+    req.session.flash='Itens não preparados descartados. Matérias vinculadas foram preservadas.';res.redirect('/admin/automacao?status=unprepared');
+  });
   app.post('/admin/automacao/config',requireUser,editor,checkCsrf,async(req,res)=>{await transaction(db,async()=>{await db.prepare("UPDATE settings SET value=? WHERE key='automation_paused'").run(req.body.enabled==='on'?'0':'1');await db.prepare("UPDATE settings SET value=? WHERE key='automation_publish'").run(req.body.publish==='on'?'1':'0');});res.redirect('/admin/automacao');});
   app.post('/admin/automacao/fontes/:id',requireUser,editor,checkCsrf,async(req,res)=>{
     const source=await db.prepare('SELECT * FROM automation_sources WHERE id=?').get(req.params.id);if(!source)return res.sendStatus(404);
