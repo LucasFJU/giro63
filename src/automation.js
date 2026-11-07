@@ -9,24 +9,34 @@ import {generateNews} from './gemini-editor.js';
 import {discoverImage,addImageSuggestion} from './article-images.js';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const escape=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-export async function event(db,message){await db.prepare('INSERT INTO automation_events(id,created_at,message) VALUES(?,?,?)').run(randomUUID(),new Date().toISOString(),message.slice(0,500));}
+export async function event(db,message,now=Date.now()){await db.prepare('INSERT INTO automation_events(id,created_at,message) VALUES(?,?,?)').run(randomUUID(),new Date(now).toISOString(),message.slice(0,500));}
 export async function reservePublication(db,regional,now=Date.now()){
   const day=dayInSaoPaulo(now);await db.prepare('INSERT INTO automation_daily(day) VALUES(?) ON CONFLICT DO NOTHING').run(day);
   const result=await db.prepare('UPDATE automation_daily SET published=published+1,national=national+? WHERE day=? AND published<10 AND national+?<=3').run(regional?0:1,day,regional?0:1);return result.changes===1;
 }
-export async function ingest(db,source,entries){
+export async function ingest(db,source,entries,now=Date.now()){
   for(const entry of entries){
     if(isVideoEntry(entry))continue;
     const fingerprint=hash((entry.title+' '+entry.summary).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,''));
     const old=await db.prepare('SELECT * FROM automation_items WHERE (source_id=? AND uid=?) OR url=?').get(source.id,entry.uid,entry.url);
-    if(old){if(old.fingerprint!==fingerprint){await db.prepare('UPDATE automation_items SET note=?,updated_at=? WHERE id=?').run('Fonte atualizada: conferir a origem. Texto editorial preservado.',new Date().toISOString(),old.id);}continue;}
-    const candidates=await db.prepare('SELECT title,fingerprint FROM automation_items WHERE original_at>=?').all(new Date(Date.now()-48*3600000).toISOString());
+    if(old){if(old.fingerprint!==fingerprint){await db.prepare('UPDATE automation_items SET note=?,updated_at=? WHERE id=?').run('Fonte atualizada: conferir a origem. Texto editorial preservado.',new Date(now).toISOString(),old.id);}continue;}
+    const candidates=await db.prepare('SELECT title,fingerprint FROM automation_items WHERE original_at>=?').all(new Date(now-48*3600000).toISOString());
     const words=new Set(slugify(entry.title).split('-').filter(w=>w.length>3));
     const duplicate=candidates.some(x=>{const other=new Set(slugify(x.title).split('-').filter(w=>w.length>3)),shared=[...words].filter(w=>other.has(w)).length;return x.fingerprint===fingerprint||words.size>=4&&shared/Math.max(words.size,other.size)>=0.75;});
     const partner=/Reuters|France.Presse|Associated Press|Agência Lusa|\bAFP\b/i.test(entry.summary);
     const state=entry.summary.length<180||duplicate||partner?'review':'queued',note=entry.summary.length<180?'Resumo insuficiente.':partner?'Conteúdo parceiro: confirmar permissão específica de reutilização.':duplicate?'Possível duplicata entre fontes.':'';
-    await db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,note,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').run(randomUUID(),source.id,entry.uid,entry.url,entry.title,entry.summary,fingerprint,entry.originalAt,state,note,new Date().toISOString());
+    await db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,note,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').run(randomUUID(),source.id,entry.uid,entry.url,entry.title,entry.summary,fingerprint,entry.originalAt,state,note,new Date(now).toISOString());
   }
+}
+export function automationPriority(item,now=Date.now()){
+  const time=Date.parse(item.original_at);if(!Number.isFinite(time)||time>now||dayInSaoPaulo(time)!==dayInSaoPaulo(now))return null;
+  return item.region==='regional'?(time>=now-2*3600000?0:2):1;
+}
+export async function selectAutomationItem(db,now=Date.now()){
+  const daily=await db.prepare('SELECT * FROM automation_daily WHERE day=?').get(dayInSaoPaulo(now));
+  if(Number(daily?.published||0)>=10||Number(daily?.calls||0)>=20)return null;
+  const items=await db.prepare("SELECT i.*,s.name AS source_name,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state IN ('queued','failed') AND i.article_id IS NULL AND i.attempts<2 AND s.active=1 AND s.approved=1").all();
+  return items.filter(i=>automationPriority(i,now)!==null&&(i.region==='regional'||Number(daily?.national||0)<3)).sort((a,b)=>automationPriority(a,now)-automationPriority(b,now)||Date.parse(b.original_at)-Date.parse(a.original_at)||a.id.localeCompare(b.id))[0]||null;
 }
 export async function trimAutomationQueue(db,now=Date.now()){
   return transaction(db,async()=>{
@@ -37,9 +47,14 @@ export async function trimAutomationQueue(db,now=Date.now()){
     await db.prepare("UPDATE automation_items SET state='discarded',note='Expirado: mais de 48 horas desde a publicação original.',updated_at=? WHERE state IN ('queued','failed') AND article_id IS NULL AND original_at<?").run(stamp,cutoff);
     const running=await db.prepare("SELECT s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state='processing'").all();
     let slots=running.length,national=running.filter(i=>i.region!=='regional').length;
-    const waiting=await db.prepare("SELECT i.id,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state IN ('queued','failed') AND i.article_id IS NULL ORDER BY CASE WHEN s.region='regional' THEN 0 ELSE 1 END,i.original_at DESC,i.id").all();
-    for(const item of waiting){const isNational=item.region!=='regional';if(slots<20&&(!isNational||national<4)){slots++;if(isNational)national++;continue;}
-      await db.prepare("UPDATE automation_items SET state='discarded',note='Fora da fila: limite de 20 itens, com até 4 nacionais; prioridade regional e mais recente.',updated_at=? WHERE id=? AND state IN ('queued','failed')").run(stamp,item.id);
+    const waiting=await db.prepare("SELECT i.id,i.original_at,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state IN ('queued','failed') AND i.article_id IS NULL").all();
+    const eligible=[];
+    for(const item of waiting){if(automationPriority(item,now)===null){await db.prepare("UPDATE automation_items SET state='discarded',note='Fora do dia atual',updated_at=? WHERE id=? AND state IN ('queued','failed')").run(stamp,item.id);}else eligible.push(item);}
+    const nationalPlaces=Math.min(Math.max(0,4-national),eligible.filter(i=>i.region!=='regional').length);
+    const regionalLimit=Math.max(0,20-running.length-nationalPlaces);let regionalKept=0;
+    eligible.sort((a,b)=>automationPriority(a,now)-automationPriority(b,now)||Date.parse(b.original_at)-Date.parse(a.original_at)||a.id.localeCompare(b.id));
+    for(const item of eligible){const isNational=item.region!=='regional';if(slots<20&&(isNational?national<4:regionalKept<regionalLimit)){slots++;if(isNational)national++;else regionalKept++;continue;}
+      await db.prepare("UPDATE automation_items SET state='discarded',note='Fora da fila: limite de 20 itens, com até 4 nacionais; prioridade regional recente e notícias do dia.',updated_at=? WHERE id=? AND state IN ('queued','failed')").run(stamp,item.id);
     }
   });
 }
@@ -51,33 +66,35 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
   const deadline=Date.now()+45000;let processed=0;
   try{
     const sources=await db.prepare('SELECT * FROM automation_sources WHERE active=1 AND approved=1 ORDER BY region DESC,id').all();
-    for(const source of sources){if(Date.now()>deadline-25000)break;try{await ingest(db,source,parseFeed(await readFeed(source.feed,source.hosts.split(',')),source.hosts.split(',')));await db.prepare("UPDATE automation_sources SET last_error='' WHERE id=?").run(source.id);}catch(error){await db.prepare('UPDATE automation_sources SET last_error=? WHERE id=?').run(('Falha ao consultar ou validar o feed: '+String(error?.message||'erro desconhecido').replace(/\s+/g,' ').slice(0,160)),source.id);}}
+    for(const source of sources){if(Date.now()>deadline-25000)break;try{await ingest(db,source,parseFeed(await readFeed(source.feed,source.hosts.split(',')),source.hosts.split(','),now),now);await db.prepare("UPDATE automation_sources SET last_error='' WHERE id=?").run(source.id);}catch(error){await db.prepare('UPDATE automation_sources SET last_error=? WHERE id=?').run(('Falha ao consultar ou validar o feed: '+String(error?.message||'erro desconhecido').replace(/\s+/g,' ').slice(0,160)),source.id);}}
     await db.prepare("UPDATE automation_items SET state=CASE WHEN attempts<2 THEN 'failed' ELSE 'review' END,note='Execução anterior interrompida.' WHERE state='processing' AND updated_at<?").run(new Date(now-120000).toISOString());
     await trimAutomationQueue(db,now);
-    const queue=await db.prepare("SELECT i.*,s.name AS source_name,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state IN ('queued','failed') AND i.attempts<2 AND s.active=1 AND s.approved=1 AND i.original_at>=? ORDER BY s.region DESC,i.original_at DESC LIMIT 1").all(new Date(now-48*3600000).toISOString());
+    const selected=await selectAutomationItem(db,now),queue=selected?[selected]:[];
+    const reasons=['Tocantins nas últimas duas horas','Nacional do dia','Tocantins mais antiga do dia'];
+    await event(db,selected?'Seleção: '+reasons[automationPriority(selected,now)]+'. Item: '+selected.id:'Sem item elegível do dia ou cotas atingidas. Aguardando novas notícias.',now);
     const categories=(await db.prepare('SELECT slug FROM editorial_categories').all()).map(x=>x.slug);
     for(const item of queue){
       if(Date.now()>deadline-37000)break;
-      const day=dayInSaoPaulo();const claimed=await transaction(db,async()=>{
+      const day=dayInSaoPaulo(now);const claimed=await transaction(db,async()=>{
         await db.prepare('INSERT INTO automation_daily(day) VALUES(?) ON CONFLICT DO NOTHING').run(day);
         const quota=await db.prepare('UPDATE automation_daily SET calls=calls+1 WHERE day=? AND calls<20').run(day);if(!quota.changes)return false;
-        const claim=await db.prepare("UPDATE automation_items SET state='processing',attempts=attempts+1,updated_at=? WHERE id=? AND state IN ('queued','failed') AND attempts<2").run(new Date().toISOString(),item.id);return claim.changes===1;
+        const claim=await db.prepare("UPDATE automation_items SET state='processing',attempts=attempts+1,updated_at=? WHERE id=? AND state IN ('queued','failed') AND attempts<2").run(new Date(now).toISOString(),item.id);return claim.changes===1;
       });if(!claimed)break;
       try{
         const {result,usage}=await generate(item,categories);await db.prepare('UPDATE automation_daily SET input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE day=?').run(usage.input,usage.output,day);
         let suggestedImage=null;if(['agencia-brasil','g1-tocantins'].includes(item.source_id)&&Date.now()<deadline-9000){try{suggestedImage=await discoverImage(item.url);}catch{/* Keep the approved neutral art if image discovery fails. */}}
         await transaction(db,async()=>{
           const permitted=await db.prepare('SELECT active,approved FROM automation_sources WHERE id=?').get(item.source_id),pause=await db.prepare("SELECT value FROM settings WHERE key='automation_paused'").get(),publishing=await db.prepare("SELECT value FROM settings WHERE key='automation_publish'").get();
-          const publish=publishing.value==='1'&&pause.value==='0'&&permitted.active&&permitted.approved&&!result.sensitive&&!result.alerts.length&&await reservePublication(db,item.region==='regional');
-          const stamp=new Date().toISOString(),slug=(slugify(result.title).slice(0,100)||'noticia')+'-'+item.id.slice(0,8),body=result.paragraphs.map(p=>'<p>'+escape(p)+'</p>').join('')+'<p>Conteúdo preparado com auxílio de inteligência artificial, a partir de informações de '+escape(item.source_name)+'. <a href="'+escape(item.url)+'">Leia a publicação original</a>.</p>';
+          const publish=publishing.value==='1'&&pause.value==='0'&&permitted.active&&permitted.approved&&!result.sensitive&&!result.alerts.length&&await reservePublication(db,item.region==='regional',now);
+          const stamp=new Date(now).toISOString(),slug=(slugify(result.title).slice(0,100)||'noticia')+'-'+item.id.slice(0,8),body=result.paragraphs.map(p=>'<p>'+escape(p)+'</p>').join('')+'<p>Conteúdo preparado com auxílio de inteligência artificial, a partir de informações de '+escape(item.source_name)+'. <a href="'+escape(item.url)+'">Leia a publicação original</a>.</p>';
           const saved=await db.prepare('INSERT INTO articles(slug,title,summary,body,category,city,byline,cover,cover_alt,credit,sources,status,created_at,updated_at,published_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(slug,result.title,result.summary,body,result.category,result.city,'Giro63 - Redação','/images/og-giro63.png','Arte ilustrativa com a marca Giro63','Arte ilustrativa Giro63',item.source_name+' — '+item.url,publish?'published':'review',stamp,stamp,publish?stamp:null);
           await assignTags(db,saved.lastInsertRowid,result.tags);
           await addImageSuggestion(db,saved.lastInsertRowid,suggestedImage);
           await db.prepare('UPDATE automation_items SET state=?,article_id=?,note=?,updated_at=? WHERE id=?').run(publish?'published':'review',saved.lastInsertRowid,result.alerts.join(' · ')||(result.sensitive?'Tema sensível: revisão editorial obrigatória.':publish?'Publicado automaticamente.':'Publicação automática pausada ou quota atingida.'),stamp,item.id);
         });processed++;
-      }catch(error){await db.prepare('UPDATE automation_items SET state=?,note=?,updated_at=? WHERE id=?').run(item.attempts+1>=2?'review':'failed',/Gemini|JSON|Campos|Texto/.test(error.message)?error.message.slice(0,200):error.name==='TimeoutError'?'Gemini excedeu o prazo de 35 segundos.':'Falha no processamento. Nova tentativa limitada.',new Date().toISOString(),item.id);}
+      }catch(error){await db.prepare('UPDATE automation_items SET state=?,note=?,updated_at=? WHERE id=?').run(item.attempts+1>=2?'review':'failed',/Gemini|JSON|Campos|Texto/.test(error.message)?error.message.slice(0,200):error.name==='TimeoutError'?'Gemini excedeu o prazo de 35 segundos.':'Falha no processamento. Nova tentativa limitada.',new Date(now).toISOString(),item.id);}
     }
-    await event(db,'Execução concluída. Itens processados: '+processed);return {message:'Execução concluída.',processed};
+    await event(db,'Execução concluída. Itens processados: '+processed,now);return {message:'Execução concluída.',processed};
   }finally{await db.prepare('DELETE FROM automation_lock WHERE id=? AND owner=?').run('runner',owner);}
 }
 export function mountAutomation(app,{db,requireUser,editor,checkCsrf}){

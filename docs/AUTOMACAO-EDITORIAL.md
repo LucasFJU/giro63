@@ -47,3 +47,11 @@ Os textos foram confrontados individualmente com o material RSS recebido, com co
 Após o lote inicial, mantêm-se os limites normais no código: 10 publicações/dia, até 3 nacionais e 20 chamadas/dia, em São Paulo. O histórico excepcional não é zerado: impede novas gerações no mesmo dia e os limites voltam a valer na virada do dia. Conteúdos sensíveis continuam em revisão. Backups incluem todas as tabelas `automation_*`, `tags` e `article_tags`.
 
 Itens identificados como vídeos ou edições de telejornais são ignorados na coleta. Pendências antigas desses formatos passam para Descartados, preservando matérias vinculadas e publicações existentes.
+
+## Prioridade do dia — 07/11/2026
+
+A data de referência é a publicação original na fonte, no horário de São Paulo. Cada lote seleciona: Tocantins nas últimas duas horas (inclusive o limite exato), nacional de hoje, Tocantins mais antiga de hoje. Nacionais deixam de ser elegíveis quando atingem três publicações no dia. Sem candidato ou com a cota diária esgotada, aguarda novas notícias sem chamar o Gemini.
+
+A fila guarda até 20 itens, reservando até quatro lugares nacionais quando disponíveis. A seleção de cada grupo usa a publicação mais recente. Itens de dias anteriores, sem matéria criada, são descartados com o motivo Fora do dia atual. A proteção de 48 horas também permanece. Revisões e matérias existentes são preservadas. A manutenção acontece após coleta e ao abrir o painel.
+
+As cotas continuam em 10 publicações/dia, até três nacionais publicadas e 20 chamadas/dia. Os quatro lugares nacionais na fila são um limite independente. Cada execução usa um horário de referência único para seleção, limpeza e contadores; os prazos de rede continuam usando o relógio real. Eventos registram a faixa selecionada e o identificador do item ou a ausência de candidatos.
