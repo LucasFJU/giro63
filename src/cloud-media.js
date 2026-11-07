@@ -13,7 +13,7 @@ export function cloudMedia({url=process.env.SUPABASE_URL,key=process.env.SUPABAS
     publicOrigin:new URL(url).origin,
     get(source){
       if(bundledMedia[source])return bundledMedia[source];
-      if(!source?.startsWith(publicUrl('editorial/')))return {src:source||'/images/cerrado.jpg',srcset:''};
+      if(!source?.startsWith(publicUrl('editorial/'))&&!(source?.startsWith(publicUrl('crops/'))&&/-\d+x\d+\.webp$/.test(source)))return {src:source||'/images/cerrado.jpg',srcset:''};
       const prefix=source.replace(/\.webp$/,'');
       const dimensions=source.match(/-(\d+)x(\d+)\.webp$/),width=Number(dimensions?.[1]),height=Number(dimensions?.[2]);
       return {src:source,srcset:[160,320,640,960,1600].filter(w=>!width||w<=width).map(w=>`${prefix}-${w}.webp ${w}w`).join(', '),...(width?{width,height}:{})};
@@ -35,7 +35,15 @@ export function cloudMedia({url=process.env.SUPABASE_URL,key=process.env.SUPABAS
       }catch(error){if(uploaded.length)await storage.remove(uploaded);throw error;}
     },
     async saveVariant(buffer){
-      const name='crops/'+randomBytes(20).toString('hex')+'.webp';const {error}=await storage.upload(name,buffer,{contentType:'image/webp',cacheControl:'31536000',upsert:false});if(error)throw Error('Não foi possível armazenar os recortes da imagem.');return publicUrl(name);
+      const metadata=await sharp(buffer,{limitInputPixels:25e6}).metadata();
+      const prefix='crops/'+randomBytes(20).toString('hex')+'-'+metadata.width+'x'+metadata.height,uploaded=[];
+      try{
+        for(const width of [0,...[160,320,640,960,1600].filter(w=>w<=metadata.width)]){
+          const name=prefix+(width?'-'+width:'')+'.webp',bytes=width?await sharp(buffer).resize({width,withoutEnlargement:true}).webp({quality:80}).toBuffer():buffer;
+          const {error}=await storage.upload(name,bytes,{contentType:'image/webp',cacheControl:'31536000',upsert:false});if(error)throw Error('Não foi possível armazenar os recortes da imagem.');uploaded.push(name);
+        }
+        return publicUrl(prefix+'.webp');
+      }catch(error){if(uploaded.length)await storage.remove(uploaded);throw error;}
     },
     async generate(){}
   };

@@ -1,6 +1,8 @@
 import {readFile} from 'node:fs/promises';
 import {createClient} from '@supabase/supabase-js';
 import {openPostgres} from '../src/postgres.js';
+import {cloudMedia} from '../src/cloud-media.js';
+import {upgradeResponsiveCrops} from '../src/responsive-crops.js';
 import {migrateDeploymentMedia} from '../src/deployment-media.js';
 
 const {DATABASE_URL,SUPABASE_URL,SUPABASE_SECRET_KEY}=process.env;
@@ -13,6 +15,9 @@ try{
   if(!['postgres:','postgresql:'].includes(connection.protocol)||!connection.password)throw Object.assign(Error('Informe a conexão PostgreSQL completa com senha.'),{code:'INVALID_DATABASE_URL'});
   const manifest=JSON.parse(await readFile(new URL('../migration-assets/manifest.json',import.meta.url),'utf8'));
   const result=await migrateDeploymentMedia({db,storage:client.storage.from(process.env.SUPABASE_STORAGE_BUCKET||'giro63-media'),manifest,readAsset:name=>readFile(new URL('../migration-assets/'+name,import.meta.url))});
+  const media=cloudMedia(),storage=client.storage.from(process.env.SUPABASE_STORAGE_BUCKET||'giro63-media');
+  const upgraded=await upgradeResponsiveCrops({db,media,read:async name=>{const {data,error}=await storage.download('crops/'+name);if(error)throw Error('Falha na leitura do recorte.');return Buffer.from(await data.arrayBuffer());}});
+  console.log('Recortes com versões responsivas: '+upgraded);
   console.log(`Mídias legadas: ${result.transferred} transferidas; ${result.unchanged} já atualizadas ou preservadas.`);
 }catch(error){
   // Never include a connection string or key in build logs.
