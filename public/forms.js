@@ -5,6 +5,7 @@ document.querySelectorAll('form').forEach(form=>{
   const status=document.createElement('p');status.className='form-progress';status.setAttribute('role','status');form.append(status);
   function fieldError(field,message){
     if(!field||field.type==='hidden')return;
+    for(let parent=field.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
     const id=(field.id||field.name)+'-validation';let note=document.getElementById(id);
     if(!note){note=document.createElement('p');note.id=id;note.className='field-error';field.after(note);}
     note.textContent=message;field.setAttribute('aria-invalid','true');field.setAttribute('aria-describedby',[...(field.getAttribute('aria-describedby')||'').split(' ').filter(Boolean),id].filter((v,i,a)=>a.indexOf(v)===i).join(' '));
@@ -23,7 +24,7 @@ document.querySelectorAll('form').forEach(form=>{
     const buttons=[...form.querySelectorAll('button')].filter(b=>b.type==='submit');
     sending=true;completed=false;form.classList.add('form-busy');form.setAttribute('aria-busy','true');buttons.forEach(b=>b.disabled=true);status.textContent=multipart?'Enviando e processando imagem e conteúdo…':'Enviando…';
     try{
-      const response=await fetch(form.action,{method:'POST',credentials:'same-origin',body:multipart?data:new URLSearchParams([...data].map(([key,value])=>[key,String(value)]))});
+      const response=await fetch(form.getAttribute('action')||window.location.href,{method:'POST',credentials:'same-origin',body:multipart?data:new URLSearchParams([...data].map(([key,value])=>[key,String(value)]))});
       if(response.redirected&&response.ok){const html=await response.text();const doc=new DOMParser().parseFromString(html,'text/html');const flash=doc.querySelector('.flash')?.textContent;try{if(flash)sessionStorage.setItem('giro63-form-feedback',flash);}catch{}completed=true;window.location.assign(response.url);return;}
       const html=await response.text(),doc=new DOMParser().parseFromString(html,'text/html');
       const renewed=doc.querySelector('meta[name=csrf-token]')?.content;if(renewed&&form.elements.namedItem('_csrf'))form.elements.namedItem('_csrf').value=renewed;

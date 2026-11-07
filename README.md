@@ -43,7 +43,7 @@ Modelo em `.env.example`. **Nunca** versione valores reais.
 | `SESSION_SECRET` | Mínimo de 48 caracteres em produção. |
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY`, `SUPABASE_STORAGE_BUCKET` | Storage de imagens. A chave secreta é só do servidor. |
 | `PUBLIC_URL` | Origem pública (canonical, Open Graph, sitemap). Também configurável em `/admin/portal`. |
-| `ALLOW_INDEXING` | `false` por padrão; habilite só no lançamento. |
+| `ALLOW_INDEXING` | `false` por padrão; Campo reservado; habilite a indexação em `/admin/portal` após a revisão de lançamento. |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | Automação editorial. Fixe o modelo explicitamente; não há fallback. |
 | `AUTOMATION_SECRET` | Opcional. Alternativa ao token OIDC do GitHub (mínimo 32 caracteres). |
 | `GIRO63_DATA_DIR`, `PORT` | Apenas modo local. |
@@ -61,9 +61,10 @@ Modelo em `.env.example`. **Nunca** versione valores reais.
 Fluxo: feed RSS aprovado → fila → Gemini → validação → rascunho ou publicação.
 
 - Fontes começam **pausadas**; cada uma exige feed, domínio permitido e nota com as condições de reuso verificadas.
+- Fila: até 20 itens, no máximo 4 nacionais, com prioridade regional e expiração após 48 horas.
 - Limites diários: 10 publicações, no máximo 3 nacionais, 20 chamadas ao Gemini. Fuso America/Sao_Paulo.
 - Vão para **revisão humana**: temas sensíveis (crime, saúde, política, acidentes etc.), números, cidades ou citações não confirmados no resumo, possíveis duplicatas, resumos curtos e conteúdo de agências parceiras.
-- Todo texto gerado traz aviso de IA no topo e link para a publicação original no fim.
+- Todo texto gerado traz aviso de auxílio de IA e link para a publicação original no fim.
 - Recomendação: mantenha a publicação automática **desligada** até revisar uma amostra de lotes na fila.
 - O endpoint `POST /internal/automation/run` aceita apenas o token OIDC do workflow oficial (repositório, branch, arquivo, evento, uso único) ou `AUTOMATION_SECRET`.
 
