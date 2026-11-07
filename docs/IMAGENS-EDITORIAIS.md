@@ -13,3 +13,9 @@ Inclua `article_image_suggestions` e as novas colunas `photo_*` no backup Postgr
 Autoria das matérias da automação: Giro63 - Redação. A informação de apoio de IA permanece no fim do texto e é independente do crédito da fotografia.
 
 Para o lote inicial, fotografias de terceiros com direitos reservados foram substituídas por imagens de arquivo da Agência Brasil ou por fotografias com licença explícita do Wikimedia Commons. Legendas identificam arquivo/ilustração e não atribuem a imagem a acontecimentos que ela não retrata. Derivados de fotos CC BY-SA mantêm a mesma licença, com indicação de recorte, autoria, link original e link de licença. O manifesto operacional com as escolhas fica em exports/ (não versionado); os dados definitivos são os campos gravados em cada matéria.
+
+## Sugestões do G1 Tocantins
+
+A automação e o botão Buscar imagem sugerida na fonte reconhecem publicações HTTPS de `g1.globo.com/to/tocantins/` e imagens no host específico `s2-g1.glbimg.com`. O metadado Open Graph identifica a imagem; crédito e legenda só são sugeridos quando vinculados à mesma imagem no conteúdo público. A licença permanece vazia e pendente de conferência, inclusive em fotos de arquivo, reprodução ou terceiros.
+
+A sugestão fica pendente e não altera a capa. O editor precisa verificar a publicação original, completar os campos e confirmar direitos e contexto antes de salvar. Downloads continuam sujeitos aos limites de formato, tamanho, pixels, tempo e destinos públicos. Páginas sem imagem elegível mantêm a capa atual.

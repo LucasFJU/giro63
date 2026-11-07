@@ -38,3 +38,21 @@ test('editor aprova sugestão com direitos e contexto; autor, CSRF, falhas e ori
   await editor.post('/admin/noticias/'+id).type('form').send({...approved,image_suggestion:'',action:'published',_csrf:csrf(await editor.get('/admin/noticias/'+id))}).expect(302);const published=await request(server).get('/noticia/imagem').expect(200);assert.ok(published.text.includes(saved.photo_share));assert.match(published.text,/Legenda verificada/);assert.match(published.text,/og:image:height" content="630/);
  }finally{await new Promise(resolve=>server.close(resolve));db.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('G1 Tocantins sugere apenas CDN aprovado e mantém licença pendente',()=>{
+ const page='https://g1.globo.com/to/tocantins/noticia/2026/11/07/teste.ghtml',image='https://s2-g1.glbimg.com/token/1200x0/internal_photos/bs/2026/foto.jpg';
+ const html=`<meta property="og:image" content="${image}"><figure><img src="${image}" alt="Praça em Palmas — Foto: Autora/Arquivo pessoal"></figure>`;
+ const result=imageFromPage(html,page);assert.equal(result.photographer,'Autora/Arquivo pessoal');assert.equal(result.caption,'Praça em Palmas');assert.equal(result.license,'');assert.match(result.source,/direitos a conferir/);
+ assert.equal(imageFromPage(html.replaceAll('s2-g1.glbimg.com','attacker.example'),page),null);
+ assert.throws(()=>imageFromPage(html,page.replace('/to/tocantins/','/sp/')));
+ assert.equal(imageFromPage(html.replace('<figure>','<figure hidden>').replaceAll('alt="Praça em Palmas — Foto: Autora/Arquivo pessoal"','alt=""'),page).photographer,'');
+});
+
+test('sugestão G1 persiste pendente e rejeita associação de origem cruzada',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'giro63-g1-images-')),app=await createApp({dataDir:dir,uploadDir:path.join(dir,'uploads')}),db=app.locals.db;
+ try{const stamp=new Date().toISOString(),saved=db.prepare("INSERT INTO articles(slug,title,category,created_at,updated_at) VALUES('g1','Matéria','cidades',?,?)").run(stamp,stamp);
+ const g1={...candidate,source_page:'https://g1.globo.com/to/tocantins/noticia/2026/11/07/teste.ghtml',image_url:'https://s2-g1.glbimg.com/teste.jpg',source:'G1 Tocantins — direitos a conferir'};
+ await addImageSuggestion(db,saved.lastInsertRowid,g1);await addImageSuggestion(db,saved.lastInsertRowid,g1);assert.equal(db.prepare('SELECT count(*) n FROM article_image_suggestions').get().n,1);assert.equal(db.prepare('SELECT status FROM article_image_suggestions').get().status,'pending');assert.equal(db.prepare('SELECT cover FROM articles').get().cover,'/images/cerrado.jpg');
+ await assert.rejects(addImageSuggestion(db,saved.lastInsertRowid,{...g1,source_page:page}),/domínios aprovados/);
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});

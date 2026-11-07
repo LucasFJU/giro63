@@ -62,7 +62,7 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
       });if(!claimed)break;
       try{
         const {result,usage}=await generate(item,categories);await db.prepare('UPDATE automation_daily SET input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE day=?').run(usage.input,usage.output,day);
-        let suggestedImage=null;if(item.source_id==='agencia-brasil'&&Date.now()<deadline-9000){try{suggestedImage=await discoverImage(item.url);}catch{/* Keep the approved neutral art if image discovery fails. */}}
+        let suggestedImage=null;if(['agencia-brasil','g1-tocantins'].includes(item.source_id)&&Date.now()<deadline-9000){try{suggestedImage=await discoverImage(item.url);}catch{/* Keep the approved neutral art if image discovery fails. */}}
         await transaction(db,async()=>{
           const permitted=await db.prepare('SELECT active,approved FROM automation_sources WHERE id=?').get(item.source_id),pause=await db.prepare("SELECT value FROM settings WHERE key='automation_paused'").get(),publishing=await db.prepare("SELECT value FROM settings WHERE key='automation_publish'").get();
           const publish=publishing.value==='1'&&pause.value==='0'&&permitted.active&&permitted.approved&&!result.sensitive&&!result.alerts.length&&await reservePublication(db,item.region==='regional');
