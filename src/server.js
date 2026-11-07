@@ -124,7 +124,8 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
   });
   const blankArticle=()=>({id:null,title:'',summary:'',body:'',category:'cidades',city:'',byline:'',cover:'',cover_alt:'',credit:'',sources:'',status:'draft',featured:0,urgent:0,demo:0,feedback:''});
   const findEditable=async (req,res)=>{
-    const a=(await db.prepare('SELECT * FROM articles WHERE id=?').get(Number(req.params.id)));
+    const id=Number(req.params.id);
+    const a=Number.isSafeInteger(id)&&id>0?await db.prepare('SELECT * FROM articles WHERE id=?').get(id):null;
     if(!a){res.status(404).render('error',{title:'Matéria não encontrada',message:'Confira o endereço e volte ao painel.'});return null;}
     if(res.locals.user.role!=='editor'&&(a.author_id!==res.locals.user.id||a.status==='published')){res.status(403).render('error',{title:'Acesso restrito',message:'Autores podem editar apenas suas próprias matérias ainda não publicadas.'});return null;}a.tags=(await tagsFor(db,a.id)).map(t=>t.name).join(', ');res.locals.articleTags=await tagsFor(db,a.id);res.locals.imageSuggestions=await db.prepare("SELECT * FROM article_image_suggestions WHERE article_id=? AND status='pending' ORDER BY created_at DESC").all(a.id);return a;
   };
