@@ -16,8 +16,9 @@ export function validateGenerated(value,item,categories){
   const sourceWords=plain(item.summary).split(/\s+/).filter(Boolean).length,bodyWords=body.split(/\s+/).filter(Boolean).length;
   if(sourceWords<120)alerts.push('Material recebido curto: complementar a apuração antes de publicar.');
   else if(bodyWords<Math.min(220,Math.floor(sourceWords*0.65)))alerts.push('Texto pouco desenvolvido para o material disponível: revisar os detalhes antes de publicar.');
-  if(value.city&&!original.includes(value.city.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase()))alerts.push('Cidade não confirmada no material recebido.');
-  const numbers=(value.title+' '+value.summary+' '+body).match(/\d+(?:[.,]\d+)*/g)||[];if(numbers.some(n=>!original.includes(n)))alerts.push('Número não confirmado no resumo.');
-  const sensitive=value.sensitive||/(crime|pres[oa]s?\b|suspeit|acusa|homic|pol[ií]cia|sa[uú]de|vacina|medic|doen[cç]a|elei[cç]|candidat|urna|justi[cç]a)/i.test(item.title+' '+item.summary+' '+value.title)||['saude','seguranca','politica'].includes(value.category);
+  if(value.city&&!new RegExp('(^|[^a-z0-9])'+value.city.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'($|[^a-z0-9])').test(original))alerts.push('Cidade não confirmada no material recebido.');
+  const numberTokens=text=>new Set(String(text).match(/\d+(?:[.,]\d+)*/g)||[]),known=numberTokens(item.title+' '+item.summary);if([...numberTokens(value.title+' '+value.summary+' '+body)].some(n=>!known.has(n)))alerts.push('Número não confirmado no resumo.');
+  const quoteMarks=/["“”«»]/;if(quoteMarks.test(value.title+' '+value.summary+' '+body)&&!quoteMarks.test(item.title+' '+item.summary))alerts.push('Citação não confirmada no material recebido.');
+  const sensitive=value.sensitive||/(crime|pres[oa]s?\b|pris[aã]o|suspeit|acusa|homic|assassin|estupr|viol[eê]ncia|tr[aá]fico|drog|pol[ií]cia|opera[cç][aã]o|acident|mort[eo]s?\b|morre|[oó]bito|v[ií]tima|sa[uú]de|vacina|medic|doen[cç]a|surto|epidemi|elei[cç]|candidat|urna|partid|justi[cç]a|tribunal|processo|licita[cç]|improbidade|corrup|menor(es)? de idade|adolescente|crian[cç]a|desaparec|inc[eê]ndio|desastre|tempestade|alerta)/i.test(item.title+' '+item.summary+' '+value.title)||['saude','seguranca','politica'].includes(value.category);
   return {...value,title:plain(value.title),summary:plain(value.summary),paragraphs,sensitive,alerts,city:alerts.some(a=>a.startsWith('Cidade'))?'':plain(value.city).slice(0,100)};
 }
