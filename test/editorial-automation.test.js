@@ -9,7 +9,7 @@ import {initializeEditorial} from '../src/editorial-schema.js';
 import {assignTags,tagsFor} from '../src/tags.js';
 import {parseFeed,approvedUrl,publicAddress} from '../src/feed-reader.js';
 import {validateGenerated} from '../src/gemini-editor.js';
-import {ingest,runAutomation,reservePublication} from '../src/automation.js';
+import {ingest,runAutomation,reservePublication,trimAutomationQueue} from '../src/automation.js';
 import {validWorkflow} from '../src/workflow-auth.js';
 import {createApp} from '../src/server.js';
 const temporary=()=>mkdtempSync(path.join(os.tmpdir(),'giro63-automation-'));
@@ -87,4 +87,12 @@ test('matérias desenvolvidas aceitam mais parágrafos e textos curtos exigem re
  assert.equal(validateGenerated(value,item,['cidades']).alerts.length,0);
  assert.match(validateGenerated({...value,paragraphs:[paragraph]},item,['cidades']).alerts.join(' '),/pouco desenvolvido/);
  assert.match(validateGenerated({...value,paragraphs:[paragraph]},{...item,summary:paragraph},['cidades']).alerts.join(' '),/Material recebido curto/);
+});
+
+test('fila limita 20 itens, quatro nacionais e expira mais de 48 horas',async()=>{
+ const dir=temporary(),db=openDatabase(dir);try{await initializeEditorial(db);const now=Date.now();
+ for(let n=0;n<35;n++)db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run('queue-'+n,n<18?'g1-tocantins':'agencia-brasil','q'+n,'https://example.test/'+n,'Título '+n,'Material','fp'+n,new Date(now-(n===0?49:1)*3600000).toISOString(),'queued',new Date(now).toISOString());
+ await trimAutomationQueue(db,now);const rows=db.prepare("SELECT source_id FROM automation_items WHERE state='queued'").all();assert.equal(rows.length,20);assert.equal(rows.filter(r=>r.source_id==='agencia-brasil').length,3);assert.match(db.prepare("SELECT note FROM automation_items WHERE id='queue-0'").get().note,/Expirado/);
+ await trimAutomationQueue(db,now+49*3600000);assert.equal(db.prepare("SELECT count(*) n FROM automation_items WHERE state='queued'").get().n,0);
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
 });

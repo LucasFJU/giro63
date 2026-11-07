@@ -27,6 +27,19 @@ export async function ingest(db,source,entries){
     await db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,note,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING').run(randomUUID(),source.id,entry.uid,entry.url,entry.title,entry.summary,fingerprint,entry.originalAt,state,note,new Date().toISOString());
   }
 }
+export async function trimAutomationQueue(db,now=Date.now()){
+  return transaction(db,async()=>{
+    if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
+    const stamp=new Date(now).toISOString(),cutoff=new Date(now-48*3600000).toISOString();
+    await db.prepare("UPDATE automation_items SET state='discarded',note='Expirado: mais de 48 horas desde a publicação original.',updated_at=? WHERE state IN ('queued','failed') AND article_id IS NULL AND original_at<?").run(stamp,cutoff);
+    const running=await db.prepare("SELECT s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state='processing'").all();
+    let slots=running.length,national=running.filter(i=>i.region!=='regional').length;
+    const waiting=await db.prepare("SELECT i.id,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state IN ('queued','failed') AND i.article_id IS NULL ORDER BY CASE WHEN s.region='regional' THEN 0 ELSE 1 END,i.original_at DESC,i.id").all();
+    for(const item of waiting){const isNational=item.region!=='regional';if(slots<20&&(!isNational||national<4)){slots++;if(isNational)national++;continue;}
+      await db.prepare("UPDATE automation_items SET state='discarded',note='Fora da fila: limite de 20 itens, com até 4 nacionais; prioridade regional e mais recente.',updated_at=? WHERE id=? AND state IN ('queued','failed')").run(stamp,item.id);
+    }
+  });
+}
 export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews,key=process.env.GEMINI_API_KEY,now=Date.now()}={}){
   const settings=Object.fromEntries((await db.prepare("SELECT key,value FROM settings WHERE key IN ('automation_paused','automation_publish')").all()).map(x=>[x.key,x.value]));
   if(settings.automation_paused!=='0')return {message:'Automação pausada.'};if(!key)return {message:'Configure GEMINI_API_KEY na Vercel.'};
@@ -37,6 +50,7 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
     const sources=await db.prepare('SELECT * FROM automation_sources WHERE active=1 AND approved=1 ORDER BY region DESC,id').all();
     for(const source of sources){if(Date.now()>deadline-25000)break;try{await ingest(db,source,parseFeed(await readFeed(source.feed,source.hosts.split(',')),source.hosts.split(',')));await db.prepare("UPDATE automation_sources SET last_error='' WHERE id=?").run(source.id);}catch{await db.prepare('UPDATE automation_sources SET last_error=? WHERE id=?').run('Falha ao consultar ou validar o feed. Confira o endereço e tente novamente.',source.id);}}
     await db.prepare("UPDATE automation_items SET state=CASE WHEN attempts<2 THEN 'failed' ELSE 'review' END,note='Execução anterior interrompida.' WHERE state='processing' AND updated_at<?").run(new Date(now-120000).toISOString());
+    await trimAutomationQueue(db,now);
     const queue=await db.prepare("SELECT i.*,s.name AS source_name,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state IN ('queued','failed') AND i.attempts<2 AND s.active=1 AND s.approved=1 AND i.original_at>=? ORDER BY s.region DESC,i.original_at DESC LIMIT 1").all(new Date(now-48*3600000).toISOString());
     const categories=(await db.prepare('SELECT slug FROM editorial_categories').all()).map(x=>x.slug);
     for(const item of queue){
@@ -65,6 +79,7 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
 }
 export function mountAutomation(app,{db,requireUser,editor,checkCsrf}){
   app.get('/admin/automacao',requireUser,editor,async(req,res)=>{
+    await trimAutomationQueue(db);
     const filter=['pending','unprepared','queued','published','discarded','all'].includes(req.query.status)?req.query.status:'pending';
     const q=String(req.query.q||'').trim().slice(0,100),sourceFilter=String(req.query.source||'').slice(0,100),conditions=[],params=[];
     const ready="i.state='review' AND EXISTS (SELECT 1 FROM articles a WHERE a.id=i.article_id AND a.status='review' AND trim(a.body)<>'') AND "+['resumo insuficiente','material recebido curto','pouco desenvolvido','duplic','permiss','restricao de uso','falha na gera'].map(term=>"normalize_search(i.note) NOT LIKE '%"+term+"%'").join(' AND ');
