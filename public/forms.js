@@ -5,6 +5,7 @@ document.querySelectorAll('form').forEach(form=>{
   const status=document.createElement('p');status.className='form-progress';status.setAttribute('role','status');form.append(status);
   function fieldError(field,message){
     if(!field||field.type==='hidden')return;
+    for(let parent=field.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS')parent.open=true;
     const id=(field.id||field.name)+'-validation';let note=document.getElementById(id);
     if(!note){note=document.createElement('p');note.id=id;note.className='field-error';field.after(note);}
     note.textContent=message;field.setAttribute('aria-invalid','true');field.setAttribute('aria-describedby',[...(field.getAttribute('aria-describedby')||'').split(' ').filter(Boolean),id].filter((v,i,a)=>a.indexOf(v)===i).join(' '));

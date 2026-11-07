@@ -83,6 +83,23 @@ export function mountAutomation(app,{db,requireUser,editor,checkCsrf}){
     try{if(feed)approvedUrl(feed,source.hosts.split(','));if((active||approved)&&(!feed||note.length<20||!approved))throw Error();if(active)parseFeed(await fetchFeed(feed,source.hosts.split(',')),source.hosts.split(','));await db.prepare('UPDATE automation_sources SET feed=?,permission_note=?,approved=?,active=?,last_error=? WHERE id=?').run(feed,note,approved,active,'',source.id);}catch{await db.prepare('UPDATE automation_sources SET active=0,approved=0,feed=?,permission_note=?,last_error=? WHERE id=?').run(feed,note,'Não ativada: confirme feed HTTPS válido e registre as condições de reutilização.',source.id);}res.redirect('/admin/automacao');
   });
   app.post('/admin/automacao/executar',requireUser,editor,checkCsrf,async(req,res)=>{const result=await runAutomation(db);req.session.flash=result.message;res.redirect('/admin/automacao');});
+  app.post('/admin/automacao/itens/:id/criar-materia',requireUser,editor,checkCsrf,async(req,res)=>{
+    const result=await transaction(db,async()=>{
+      if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
+      const item=await db.prepare('SELECT i.*,s.name AS source_name FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.id=?'+(db.dialect==='postgres'?' FOR UPDATE OF i':'')).get(req.params.id);
+      if(!item)return {status:404};
+      if(item.article_id)return {id:item.article_id};
+      if(!['review','failed','queued'].includes(item.state))return {status:409};
+      const stamp=new Date().toISOString(),slug=(slugify(item.title).slice(0,100)||'materia')+'-'+randomUUID();
+      const feedback='Preparação manual a partir de item RSS. Confira a fonte, os direitos de uso e complemente a apuração antes de publicar. '+(item.note||'');
+      const saved=await db.prepare('INSERT INTO articles(slug,title,summary,body,category,byline,cover,cover_alt,credit,sources,status,author_id,feedback,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(slug,item.title,item.summary.slice(0,500),'','cidades','Giro63 - Redação','/images/og-giro63.png','Arte ilustrativa com a marca Giro63','Arte ilustrativa Giro63',item.source_name+' — '+item.url,'draft',res.locals.user.id,feedback,stamp,stamp);
+      await db.prepare("UPDATE automation_items SET article_id=?,state='review',updated_at=? WHERE id=?").run(saved.lastInsertRowid,stamp,item.id);
+      return {id:saved.lastInsertRowid};
+    });
+    if(result.status)return res.status(result.status).render('error',{title:'Item indisponível',message:result.status===404?'Item não encontrado.':'Este item está em processamento ou foi encerrado. Atualize a fila antes de continuar.'});
+    req.session.flash='Rascunho aberto para edição manual. Complete o conteúdo e confira a editoria antes de publicar.';
+    res.redirect('/admin/noticias/'+result.id);
+  });
   app.post('/admin/automacao/itens/:id/descartar',requireUser,editor,checkCsrf,async(req,res)=>{await db.prepare("UPDATE automation_items SET state='discarded',note='Descartado pela redação.' WHERE id=? AND state<>'published'").run(req.params.id);res.redirect('/admin/automacao');});
   app.post('/internal/automation/run',async(req,res)=>{
     const expected=Buffer.from(process.env.AUTOMATION_SECRET||''),supplied=Buffer.from(String(req.get('authorization')||'').replace(/^Bearer /,''));const staticAuth=expected.length>=32&&expected.length===supplied.length&&timingSafeEqual(expected,supplied);if(!staticAuth&&!await authorizeWorkflow(db,supplied.toString()))return res.sendStatus(401);res.set('Cache-Control','no-store').json(await runAutomation(db));
