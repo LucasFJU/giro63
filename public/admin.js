@@ -14,3 +14,10 @@ if(editorForm){let dirty=false;const feedback=document.querySelector('.editor-fe
 
 const bulkSelect=document.getElementById('bulk-select-page');
 if(bulkSelect){const items=[...document.querySelectorAll('[data-bulk-item]')];bulkSelect.addEventListener('change',()=>items.forEach(i=>i.checked=bulkSelect.checked));items.forEach(i=>i.addEventListener('change',()=>{bulkSelect.checked=items.every(i=>i.checked);bulkSelect.indeterminate=items.some(i=>i.checked)&&!bulkSelect.checked;}));}
+
+const adminToggle=document.querySelector('.admin-menu-toggle');
+if(adminToggle)adminToggle.addEventListener('click',()=>{const open=adminToggle.getAttribute('aria-expanded')!=='true';adminToggle.setAttribute('aria-expanded',String(open));document.querySelector('.editorial-nav').classList.toggle('menu-open',open);});
+const recordSearch=document.querySelector('#record-search');
+if(recordSearch)recordSearch.addEventListener('input',()=>{let count=0;document.querySelectorAll('[data-record-search]').forEach(row=>{row.hidden=!normalize(row.dataset.recordSearch).includes(normalize(recordSearch.value.trim()));if(!row.hidden)count++;});document.querySelector('#record-empty').hidden=count>0;});
+document.addEventListener('click',event=>{const button=event.target.closest('[data-confirm]');if(button&&!confirm(button.dataset.confirm)){event.preventDefault();event.stopImmediatePropagation();}},true);
+if(document.querySelector('.form-error'))document.querySelectorAll('.editor-form details').forEach(d=>d.open=true);

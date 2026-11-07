@@ -120,8 +120,16 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
   app.post('/admin/logout',requireUser,checkCsrf,(req,res,next)=>req.session.destroy(err=>err?next(err):res.clearCookie('giro63.sid').redirect('/admin/login')));
   app.use('/admin',requireUser);
   app.get(['/admin','/admin/materias'],async (req,res)=>{
-    const user=res.locals.user;const articles=(await db.prepare(`SELECT a.*,u.name AS author_name FROM articles a LEFT JOIN users u ON u.id=a.author_id ${user.role==='author'?'WHERE author_id=?':''} ORDER BY updated_at DESC,id DESC`).all(...(user.role==='author'?[user.id]:[])));
-    res.render('dashboard',{title:req.path==='/admin'?'Visão geral':'Matérias',articles});
+    const user=res.locals.user,overview=req.path==='/admin',q=String(req.query.q||'').trim().slice(0,100),status=['draft','review','published','checking'].includes(req.query.status)?req.query.status:'',category=String(req.query.category||'').slice(0,100);
+    const base=user.role==='author'?'a.author_id=?':'1=1',baseParams=user.role==='author'?[user.id]:[];
+    const checking="EXISTS(SELECT 1 FROM automation_items i WHERE i.article_id=a.id AND i.review_pending=1)";
+    const stats=await db.prepare(`SELECT count(*) AS total,SUM(CASE WHEN status='draft' THEN 1 ELSE 0 END) AS draft,SUM(CASE WHEN status='review' THEN 1 ELSE 0 END) AS review,SUM(CASE WHEN status='published' THEN 1 ELSE 0 END) AS published FROM articles a WHERE ${base}`).get(...baseParams);
+    const conditions=[base],params=[...baseParams];
+    if(!overview){if(q){conditions.push("normalize_search(a.title||' '||COALESCE(u.name,a.byline,'')||' '||a.city) LIKE normalize_search(?) ESCAPE '!'");params.push('%'+q.replace(/[!%_]/g,'!$&')+'%');}if(status==='checking')conditions.push("a.status='published' AND "+checking);else if(status){conditions.push('a.status=?');params.push(status);}if(category){conditions.push('a.category=?');params.push(category);}}
+    const join='FROM articles a LEFT JOIN users u ON u.id=a.author_id WHERE '+conditions.join(' AND '),total=Number((await db.prepare('SELECT count(*) AS n '+join).get(...params)).n),page=Math.min(Math.max(1,parseInt(req.query.page)||1),Math.max(1,Math.ceil(total/20)));
+    const articles=await db.prepare('SELECT a.*,u.name AS author_name,CASE WHEN '+checking+' THEN 1 ELSE 0 END AS review_pending '+join+' ORDER BY a.updated_at DESC,a.id DESC LIMIT ? OFFSET ?').all(...params,overview?10:20,overview?0:(page-1)*20);
+    const pageLink=n=>'/admin/materias?'+new URLSearchParams({q,status,category,page:String(n)});
+    res.render('dashboard',{title:overview?'Visão geral':'Matérias',articles,stats,q,status,category,page,total,pages:Math.ceil(total/20),pageLink});
   });
   const blankArticle=()=>({id:null,title:'',summary:'',body:'',category:'cidades',city:'',byline:'',cover:'',cover_alt:'',credit:'',sources:'',status:'draft',featured:0,urgent:0,demo:0,feedback:''});
   const findEditable=async (req,res)=>{
