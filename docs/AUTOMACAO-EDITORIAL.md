@@ -45,3 +45,5 @@ O script operacional `scripts/prepare-initial-news.js`, habilitado apenas por `P
 Os textos foram confrontados individualmente com o material RSS recebido, com correções de redação, temporalidade, números ambíguos e autoria de gol antes da publicação. Isso é uma revisão de consistência com a fonte, sem apuração independente. Não foram importadas fotografias. Somente a Agência Brasil está liberada; conteúdos de parceiros identificados permanecem para revisão de direitos.
 
 Após o lote inicial, mantêm-se os limites normais no código: 10 publicações/dia, até 3 nacionais e 20 chamadas/dia, em São Paulo. O histórico excepcional não é zerado: impede novas gerações no mesmo dia e os limites voltam a valer na virada do dia. Conteúdos sensíveis continuam em revisão. Backups incluem todas as tabelas `automation_*`, `tags` e `article_tags`.
+
+Itens identificados como vídeos ou edições de telejornais são ignorados na coleta. Pendências antigas desses formatos passam para Descartados, preservando matérias vinculadas e publicações existentes.

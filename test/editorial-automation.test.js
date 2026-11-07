@@ -7,7 +7,7 @@ import request from 'supertest';
 import {openDatabase,hashPassword} from '../src/db.js';
 import {initializeEditorial} from '../src/editorial-schema.js';
 import {assignTags,tagsFor} from '../src/tags.js';
-import {parseFeed,approvedUrl,publicAddress} from '../src/feed-reader.js';
+import {parseFeed,approvedUrl,publicAddress,isVideoEntry} from '../src/feed-reader.js';
 import {validateGenerated} from '../src/gemini-editor.js';
 import {ingest,runAutomation,reservePublication,trimAutomationQueue} from '../src/automation.js';
 import {validWorkflow} from '../src/workflow-auth.js';
@@ -107,4 +107,14 @@ test('validação rejeita números por substring, cidade parcial e citações in
  assert.ok(validateGenerated({...base,paragraphs:['O prefeito disse: “vamos entregar”.']},item,['cidades']).alerts.some(a=>/Citação/.test(a)));
  assert.equal(validateGenerated(base,{title:'Acidente na TO-050',summary:'Um acidente deixou feridos.'},['cidades']).sensitive,true);
  assert.equal(validateGenerated(base,item,['cidades']).sensitive,false);
+});
+
+test('vídeos e edições não entram na coleta; vídeos pendentes são retirados sem apagar matérias',async()=>{
+ assert.equal(isVideoEntry({title:'VÍDEOS: Jornal Anhanguera',url:'https://g1.globo.com/to/tocantins/edicao/2026/teste.ghtml'}),true);
+ assert.equal(isVideoEntry({title:'Transporte em Palmas',url:'https://g1.globo.com/to/tocantins/noticia/teste.ghtml'}),false);
+ const dir=temporary(),db=openDatabase(dir);try{await initializeEditorial(db);const source=db.prepare("SELECT * FROM automation_sources WHERE id='g1-tocantins'").get(),stamp=new Date().toISOString();
+ await ingest(db,source,[{title:'VÍDEOS: Jornal',url:'https://g1.globo.com/to/tocantins/edicao/teste.ghtml',uid:'v',summary:'Resumo '.repeat(50),originalAt:stamp}]);assert.equal(db.prepare('SELECT count(*) n FROM automation_items').get().n,0);
+ const id=article(db);db.prepare("INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,updated_at,article_id) VALUES('v','g1-tocantins','v','https://g1.globo.com/to/tocantins/edicao/teste.ghtml','VÍDEOS: Jornal','Resumo','f',?,'review',?,?)").run(stamp,stamp,id);
+ await trimAutomationQueue(db);assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='v'").get().state,'discarded');assert.equal(db.prepare('SELECT status FROM articles WHERE id=?').get(id).status,'published');
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
 });

@@ -4,7 +4,7 @@ import {transaction} from './postgres.js';
 import {dayInSaoPaulo} from './reader-experience.js';
 import {slugify} from './db.js';
 import {assignTags} from './tags.js';
-import {fetchFeed,parseFeed,approvedUrl} from './feed-reader.js';
+import {fetchFeed,parseFeed,approvedUrl,isVideoEntry} from './feed-reader.js';
 import {generateNews} from './gemini-editor.js';
 import {discoverImage,addImageSuggestion} from './article-images.js';
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -16,6 +16,7 @@ export async function reservePublication(db,regional,now=Date.now()){
 }
 export async function ingest(db,source,entries){
   for(const entry of entries){
+    if(isVideoEntry(entry))continue;
     const fingerprint=hash((entry.title+' '+entry.summary).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,''));
     const old=await db.prepare('SELECT * FROM automation_items WHERE (source_id=? AND uid=?) OR url=?').get(source.id,entry.uid,entry.url);
     if(old){if(old.fingerprint!==fingerprint){await db.prepare('UPDATE automation_items SET note=?,updated_at=? WHERE id=?').run('Fonte atualizada: conferir a origem. Texto editorial preservado.',new Date().toISOString(),old.id);}continue;}
@@ -30,6 +31,8 @@ export async function ingest(db,source,entries){
 export async function trimAutomationQueue(db,now=Date.now()){
   return transaction(db,async()=>{
     if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
+    const videoItems=await db.prepare("SELECT id,title,url FROM automation_items WHERE state IN ('queued','failed','review')").all();
+    for(const item of videoItems)if(isVideoEntry(item))await db.prepare("UPDATE automation_items SET state='discarded',note='Vídeo ou edição de telejornal: fora da coleta editorial.',updated_at=? WHERE id=? AND state IN ('queued','failed','review')").run(new Date(now).toISOString(),item.id);
     const stamp=new Date(now).toISOString(),cutoff=new Date(now-48*3600000).toISOString();
     await db.prepare("UPDATE automation_items SET state='discarded',note='Expirado: mais de 48 horas desde a publicação original.',updated_at=? WHERE state IN ('queued','failed') AND article_id IS NULL AND original_at<?").run(stamp,cutoff);
     const running=await db.prepare("SELECT s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state='processing'").all();

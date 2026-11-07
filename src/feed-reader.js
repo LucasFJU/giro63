@@ -24,6 +24,9 @@ export async function fetchApprovedBuffer(url,hosts,{maxBytes=1024*1024,accept='
   if(result.redirect){if(redirects>=2)throw Error('Redirecionamentos em excesso.');return fetchApprovedBuffer(new URL(result.redirect,u).href,hosts,{maxBytes,accept},redirects+1);}return result.bytes;
 }
 export async function fetchFeed(url,hosts){return (await fetchApprovedBuffer(url,hosts,{accept:'application/rss+xml,application/atom+xml,application/xml,text/xml'})).toString('utf8');}
+export function isVideoEntry(entry){
+ try{const path=new URL(entry.url).pathname;return /\/(?:edicao|videos?)\//i.test(path)||/^v[ií]deos?\s*(?::|$)/i.test(plain(entry.title));}catch{return false;}
+}
 export function parseFeed(xml,hosts,now=Date.now()){
   if(/<!DOCTYPE|<!ENTITY/i.test(xml)||XMLValidator.validate(xml)!==true)throw Error('XML inválido ou não permitido.');
   const parsed=new XMLParser({ignoreAttributes:false,processEntities:true}).parse(xml),raw=parsed.rss?.channel?.item??parsed.feed?.entry;if(!raw)throw Error('O endereço não contém um feed RSS ou Atom.');
@@ -34,7 +37,7 @@ export function parseFeed(xml,hosts,now=Date.now()){
       const originalAt=new Date(entry.pubDate||entry.published||entry.updated).toISOString(),age=now-Date.parse(originalAt);
       const received=String(entry.description??entry.summary?.['#text']??entry.summary??'').replace(/<h3\b[^>]*>\s*Notícias relacionadas:\s*<\/h3>\s*<ul\b[^>]*>[\s\S]*?<\/ul>/gi,'');
       const title=plain(entry.title?.['#text']??entry.title).slice(0,180),summary=plain(received.replace(/<\/(?:p|li|h[1-6])>/gi,'$& ')).slice(0,6000);
-      if(age<0||age>48*3600000||!title)return [];
+      if(age<0||age>48*3600000||!title||isVideoEntry({title,url}))return [];
       return [{uid:String(entry.guid?.['#text']??entry.guid??entry.id??url).slice(0,1000),url,title,summary,originalAt}];
     }catch{return [];}
   });
