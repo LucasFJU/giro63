@@ -1,3 +1,4 @@
+import {directoryData} from './admin-directory.js';
 import {slugify} from './db.js';
 import {transaction} from './postgres.js';
 export const normalizeTag=value=>String(value||'').trim().replace(/\s+/g,' ').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('pt-BR');
@@ -17,7 +18,8 @@ export async function replaceTags(db,id,names){await transaction(db,async()=>{aw
 export async function tagsFor(db,id){return db.prepare('SELECT t.* FROM tags t JOIN article_tags a ON a.tag_slug=t.slug WHERE a.article_id=? ORDER BY t.name').all(id);}
 export function mountTags(app,{db,requireUser,editor,checkCsrf,listing}){
   app.get('/tag/:slug',async(req,res,next)=>{const tag=await db.prepare('SELECT * FROM tags WHERE slug=?').get(req.params.slug);if(!tag)return next();return listing(req,res,{heading:tag.name,where:'id IN (SELECT article_id FROM article_tags WHERE tag_slug=?)',params:[tag.slug],intro:'Notícias sobre '+tag.name+'.'});});
-  app.get('/admin/tags',requireUser,editor,async(req,res)=>res.render('tags',{title:'Tags',error:'',tags:await db.prepare('SELECT * FROM tags ORDER BY name').all()}));
+  const tagPage=async(res,error='')=>{const rows=await db.prepare('SELECT * FROM tags ORDER BY name').all();return res.render('tags',{title:'Tags',error,...directoryData(rows,res.req.query)});};
+  app.get('/admin/tags',requireUser,editor,async(req,res)=>tagPage(res));
   app.post('/admin/tags',requireUser,editor,checkCsrf,async(req,res)=>{
     const action=String(req.body.action||''),name=tagNames([req.body.name])[0],slug=String(req.body.slug||''),target=String(req.body.target||'');
     try{await transaction(db,async()=>{
@@ -33,6 +35,6 @@ export function mountTags(app,{db,requireUser,editor,checkCsrf,listing}){
         if(action==='rename')await db.prepare('UPDATE tags SET name=?,normalized=? WHERE slug=?').run(name,normalizeTag(name),slug);
         else await db.prepare('INSERT INTO tags(slug,name,normalized) VALUES(?,?,?) ON CONFLICT DO NOTHING').run(slugify(name),name,normalizeTag(name));
       }
-    });res.redirect('/admin/tags');}catch{res.status(400).render('tags',{title:'Tags',error:'Confira o nome e o destino. Tags equivalentes devem ser unificadas.',tags:await db.prepare('SELECT * FROM tags ORDER BY name').all()});}
+    });res.redirect('/admin/tags');}catch{res.status(400);await tagPage(res,'Confira o nome e o destino. Tags equivalentes devem ser unificadas.');}
   });
 }

@@ -80,3 +80,6 @@ UPDATE giro63.automation_items SET publication_counted=1 WHERE state='published'
 ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS confirmed_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS review_completed_by BIGINT REFERENCES giro63.users(id);
 ALTER TABLE giro63.automation_items ADD COLUMN IF NOT EXISTS review_completed_at TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS archived_at TEXT NOT NULL DEFAULT '';
+ALTER TABLE giro63.articles ADD COLUMN IF NOT EXISTS deleted_at TEXT NOT NULL DEFAULT '';
