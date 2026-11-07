@@ -53,7 +53,12 @@ test('painel de tags e automação exige editor; busca e página de tags preserv
   for(const role of ['author','editor']){const agent=request.agent(app),p=await agent.get('/admin/login'),csrf=p.text.match(/name="_csrf" value="([^"]+)"/)[1];await agent.post('/admin/login').type('form').send({_csrf:csrf,email:role+'@example.test',password:'Senha de teste editorial!'}).expect(302);await agent.get('/admin/automacao').expect(role==='editor'?200:403);await agent.get('/admin/tags').expect(role==='editor'?200:403);
    if(role==='editor'){const page=await agent.get('/admin/tags'),token=page.text.match(/name="_csrf" value="([^"]+)"/)[1];await agent.post('/admin/tags').type('form').send({_csrf:token,name:'Formação',action:'create'}).expect(302);await agent.post('/admin/tags').type('form').send({_csrf:token,slug:'educacao',target:'formacao',action:'merge'}).expect(302);assert.deepEqual((await tagsFor(db,id)).map(t=>t.slug),['formacao']);
     const stamp=new Date().toISOString();for(let n=0;n<19;n++)db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run('item-'+n,'agencia-brasil','item-'+n,'https://agenciabrasil.ebc.com.br/item-'+n,'Conferência '+n,'Resumo recebido','hash-'+n,stamp,n===18?'published':'review',stamp);
-    const pending=await agent.get('/admin/automacao').expect(200);assert.match(pending.text,/Central de revisão/);assert.equal((pending.text.match(/class="automation-item"/g)||[]).length,15);assert.doesNotMatch(pending.text,/<h3>Conferência 18<\/h3>/);assert.match(pending.text,/Sem matéria criada/);
+    db.prepare("UPDATE articles SET status='review',body='<p>Texto preparado para revisão.</p>' WHERE id=?").run(id);
+    db.prepare("UPDATE automation_items SET article_id=? WHERE id NOT IN ('item-0','item-18')").run(id);
+    db.prepare("UPDATE automation_items SET note='Resumo insuficiente.' WHERE id='item-17'").run();
+    const pending=await agent.get('/admin/automacao').expect(200);assert.match(pending.text,/Central de revisão/);assert.equal((pending.text.match(/class="automation-item"/g)||[]).length,15);assert.doesNotMatch(pending.text,/<h3>Conferência 18<\/h3>/);assert.doesNotMatch(pending.text,/Sem matéria criada/);assert.doesNotMatch(pending.text,/<h3>Conferência (0|17)<\/h3>/);
+    const blocked=await agent.get('/admin/automacao?status=unprepared').expect(200);assert.equal((blocked.text.match(/class="automation-item"/g)||[]).length,2);assert.match(blocked.text,/<h3>Conferência 17<\/h3>/);
+    const all=await agent.get('/admin/automacao?status=all&q=Confer%C3%AAncia%200').expect(200);assert.match(all.text,/Sem matéria criada/);
     await agent.post('/admin/automacao/itens/item-0/criar-materia').type('form').send({}).expect(403);
     const initialCount=db.prepare('SELECT count(*) n FROM articles').get().n;
     const created=await agent.post('/admin/automacao/itens/item-0/criar-materia').type('form').send({_csrf:token}).expect(302);
@@ -61,7 +66,7 @@ test('painel de tags e automação exige editor; busca e página de tags preserv
     const draft=db.prepare('SELECT * FROM articles WHERE id=?').get(draftId);assert.equal(draft.status,'draft');assert.equal(draft.body,'');assert.match(draft.sources,/agenciabrasil/);assert.equal(created.headers.location,'/admin/noticias/'+draftId);
     await agent.post('/admin/automacao/itens/item-0/criar-materia').type('form').send({_csrf:token}).expect(302);
     assert.equal(db.prepare('SELECT count(*) n FROM articles').get().n,initialCount+1);
-    const second=await agent.get('/admin/automacao?status=pending&page=2').expect(200);assert.equal((second.text.match(/class="automation-item"/g)||[]).length,3);
+    const second=await agent.get('/admin/automacao?status=pending&page=2').expect(200);assert.equal((second.text.match(/class="automation-item"/g)||[]).length,1);
     const search=await agent.get('/admin/automacao?status=published&q=CONFERENCIA%2018&source=agencia-brasil').expect(200);assert.equal((search.text.match(/class="automation-item"/g)||[]).length,1);assert.match(search.text,/<h3>Conferência 18<\/h3>/);
     const empty=await agent.get('/admin/automacao?status=discarded').expect(200);assert.match(empty.text,/Nenhum item encontrado/);
    }
