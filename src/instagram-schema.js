@@ -1,0 +1,12 @@
+export const instagramSchema=`
+CREATE TABLE IF NOT EXISTS instagram_connection(id TEXT PRIMARY KEY,account_id TEXT NOT NULL,username TEXT NOT NULL,account_type TEXT NOT NULL,token_cipher TEXT NOT NULL,expires_at BIGINT NOT NULL,updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS instagram_oauth(id TEXT PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id),expires_at BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS instagram_posts(id TEXT PRIMARY KEY,article_id INTEGER NOT NULL UNIQUE REFERENCES articles(id),source_version TEXT NOT NULL,headline TEXT NOT NULL,standfirst TEXT NOT NULL,caption TEXT NOT NULL,photo_x INTEGER NOT NULL DEFAULT 50,photo_y INTEGER NOT NULL DEFAULT 50,rights_version TEXT NOT NULL DEFAULT '',rights_note TEXT NOT NULL DEFAULT '',approved_by INTEGER REFERENCES users(id),approved_at TEXT NOT NULL DEFAULT '',feed_path TEXT NOT NULL DEFAULT '',fallback_path TEXT NOT NULL DEFAULT '',story_path TEXT NOT NULL DEFAULT '',prepared_by INTEGER REFERENCES users(id),prepared_at TEXT NOT NULL DEFAULT '',auto_candidate INTEGER NOT NULL DEFAULT 0,test_requested INTEGER NOT NULL DEFAULT 0,cancelled INTEGER NOT NULL DEFAULT 0,change_notice TEXT NOT NULL DEFAULT '',error TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS instagram_deliveries(post_id TEXT NOT NULL REFERENCES instagram_posts(id),target TEXT NOT NULL CHECK(target IN ('feed','story')),state TEXT NOT NULL DEFAULT 'prepared',container_id TEXT NOT NULL DEFAULT '',media_id TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at BIGINT NOT NULL DEFAULT 0,ratio TEXT NOT NULL DEFAULT '3:4',error TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL,PRIMARY KEY(post_id,target));
+CREATE INDEX IF NOT EXISTS instagram_pending ON instagram_deliveries(state,next_attempt_at);
+CREATE TABLE IF NOT EXISTS instagram_events(id TEXT PRIMARY KEY,post_id TEXT REFERENCES instagram_posts(id),created_at TEXT NOT NULL,message TEXT NOT NULL);
+`;
+export async function initializeInstagram(db){
+ if(db.dialect!=='postgres')await db.exec(instagramSchema);
+ for(const [key,value] of [['instagram_mode','prepare'],['instagram_activated_at',''],['instagram_test_verified','0']])await db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT DO NOTHING').run(key,value);
+}

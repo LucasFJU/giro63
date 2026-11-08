@@ -1,0 +1,19 @@
+import {createHash,randomBytes,createCipheriv,createDecipheriv} from 'node:crypto';
+const key=secret=>{if(String(secret||'').length<48)throw Error('Configure a proteção de credenciais no servidor.');return createHash('sha256').update('giro63-instagram-v1:'+secret).digest();};
+export function sealToken(token,secret){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key(secret),iv),bytes=Buffer.concat([cipher.update(token,'utf8'),cipher.final()]);return Buffer.concat([iv,cipher.getAuthTag(),bytes]).toString('base64');}
+export function unsealToken(value,secret){const bytes=Buffer.from(value,'base64'),cipher=createDecipheriv('aes-256-gcm',key(secret),bytes.subarray(0,12));cipher.setAuthTag(bytes.subarray(12,28));return Buffer.concat([cipher.update(bytes.subarray(28)),cipher.final()]).toString('utf8');}
+export class MetaFailure extends Error{constructor({status=0,code=0,aspect=false,uncertain=false}={}){super(code===190?'A conexão com o Instagram expirou. Reconecte a conta.':aspect?'A Meta recusou a proporção da imagem.':'A Meta não concluiu a solicitação. Confira a conexão e tente novamente.');Object.assign(this,{status,code,aspect,uncertain});}}
+export function metaClient({request=fetch,version=process.env.INSTAGRAM_GRAPH_VERSION||'v24.0',appId=process.env.INSTAGRAM_APP_ID,appSecret=process.env.INSTAGRAM_APP_SECRET}={}){
+ if(!/^v\d+\.0$/.test(version))throw Error('Versão da API do Instagram inválida.');
+ async function json(url,options={}){let response;try{response=await request(url,{...options,redirect:'error',signal:AbortSignal.timeout(12000)});}catch{throw new MetaFailure({uncertain:true});}let data;try{data=await response.json();}catch{throw new MetaFailure({status:response.status,uncertain:true});}if(!response.ok||data.error){const error=data.error||{};throw new MetaFailure({status:response.status,code:Number(error.code)||0,aspect:Number(error.code)===36003||/aspect ratio/i.test(String(error.message||'')),uncertain:response.status>=500});}return data;}
+ const graph=(id,fields,token)=>{if(!/^(me|\d+)(?:\/(?:media|stories|media_publish|content_publishing_limit))?$/.test(id))throw Error('Identificador Meta inválido.');const url=new URL('https://graph.instagram.com/'+version+'/'+id);for(const [k,v] of Object.entries(fields))url.searchParams.set(k,v);return json(url,{headers:{Authorization:'Bearer '+token}});};
+ const post=(id,fields,token)=>{if(!/^\d+\/(media|media_publish)$/.test(id))throw Error('Destino Meta inválido.');return json('https://graph.instagram.com/'+version+'/'+id,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(fields)});};
+ return {
+  async exchange(code,redirect){const short=await json('https://api.instagram.com/oauth/access_token',{method:'POST',body:new URLSearchParams({client_id:appId,client_secret:appSecret,grant_type:'authorization_code',redirect_uri:redirect,code})}),entry=short.data?.[0]||short;if(!entry.access_token)throw new MetaFailure();const url=new URL('https://graph.instagram.com/access_token');url.search=new URLSearchParams({grant_type:'ig_exchange_token',client_secret:appSecret,access_token:entry.access_token}).toString();const long=await json(url);if(!long.access_token||!long.expires_in)throw new MetaFailure();return long;},
+  profile:token=>graph('me',{fields:'id,user_id,username,account_type'},token),
+  async refresh(token){return json('https://graph.instagram.com/refresh_access_token?'+new URLSearchParams({grant_type:'ig_refresh_token',access_token:token}));},
+  create:({accountId,token,url,caption,target,alt})=>post(accountId+'/media',{image_url:url,...(target==='story'?{media_type:'STORIES'}:{caption,alt_text:alt})},token),
+  status:(id,token)=>graph(id,{fields:'status_code'},token),
+  publish:(accountId,id,token)=>post(accountId+'/media_publish',{creation_id:id},token)
+ };
+}

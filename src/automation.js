@@ -1,3 +1,4 @@
+import {syncInstagramArticle} from './instagram-jobs.js';
 import {insufficientFacts,parseCodes,splitIssues,issueLabels,sourceFooter} from './publication-policy.js';
 import {authorizeWorkflow} from './workflow-auth.js';
 import {createHash,randomUUID,timingSafeEqual} from 'node:crypto';
@@ -97,6 +98,7 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
           await assignTags(db,saved.lastInsertRowid,result.tags);
           await addImageSuggestion(db,saved.lastInsertRowid,suggestedImage);
           await db.prepare('UPDATE automation_items SET state=?,article_id=?,note=?,updated_at=?,policy_version=1,blockers=?,review_reasons=?,review_pending=? WHERE id=?').run('review',saved.lastInsertRowid,[...result.alerts,...issues.blockers.map(c=>issueLabels[c]||issueLabels.UNKNOWN_ALERT)].join(' · '),stamp,JSON.stringify([...new Set(issues.blockers)]),JSON.stringify(issues.pending),issues.pending.length?1:0,item.id);
+          await syncInstagramArticle(db,saved.lastInsertRowid,{inTransaction:true});
         });processed++;
       }catch(error){await db.prepare('UPDATE automation_items SET state=?,note=?,updated_at=?,policy_version=1,blockers=? WHERE id=?').run(item.attempts+1>=2?'review':'failed',/Gemini|JSON|Campos|Texto/.test(error.message)?error.message.slice(0,200):error.name==='TimeoutError'?'Gemini excedeu o prazo de 35 segundos.':'Falha no processamento. Nova tentativa limitada.',new Date(now).toISOString(),JSON.stringify(['GENERATION_FAILED']),item.id);}
     }
@@ -136,16 +138,17 @@ export function mountAutomation(app,{db,requireUser,editor,checkCsrf}){
       const item=await db.prepare("SELECT i.* FROM automation_items i JOIN articles a ON a.id=i.article_id WHERE i.id=? AND a.status='published' AND i.review_pending=1").get(req.params.id);
       if(!item)return;
       const stamp=new Date().toISOString();await db.prepare('UPDATE automation_items SET review_pending=0,review_completed_by=?,review_completed_at=? WHERE id=?').run(res.locals.user.id,stamp,item.id);
+      await syncInstagramArticle(db,item.article_id,{inTransaction:true});
       await event(db,'Conferência concluída: '+item.id+' · editor '+res.locals.user.id);
-    });res.redirect('/admin/automacao?status=published-review');
+    });app.locals.kickInstagram?.();res.redirect('/admin/automacao?status=published-review');
   });
   app.post('/admin/automacao/itens/:id/retirar',requireUser,editor,checkCsrf,async(req,res)=>{
     await transaction(db,async()=>{
       if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
       const item=await db.prepare('SELECT article_id FROM automation_items WHERE id=?').get(req.params.id);if(!item)return;
       await db.prepare("UPDATE articles SET status='draft',featured=0,updated_at=? WHERE id=?").run(new Date().toISOString(),item.article_id);
-      await db.prepare("UPDATE automation_items SET state='review' WHERE id=?").run(req.params.id);await event(db,'Retirada de publicação: '+req.params.id+' · editor '+res.locals.user.id);
-    });res.redirect('/admin/automacao?status=published-review');
+      await db.prepare("UPDATE automation_items SET state='review' WHERE id=?").run(req.params.id);await syncInstagramArticle(db,item.article_id,{inTransaction:true});await event(db,'Retirada de publicação: '+req.params.id+' · editor '+res.locals.user.id);
+    });app.locals.kickInstagram?.();res.redirect('/admin/automacao?status=published-review');
   });
   app.post('/admin/automacao/config',requireUser,editor,checkCsrf,async(req,res)=>{await transaction(db,async()=>{await db.prepare("UPDATE settings SET value=? WHERE key='automation_paused'").run(req.body.enabled==='on'?'0':'1');await db.prepare("UPDATE settings SET value=? WHERE key='automation_publish'").run(req.body.publish==='on'?'1':'0');});res.redirect('/admin/automacao');});
   app.post('/admin/automacao/fontes/:id',requireUser,editor,checkCsrf,async(req,res)=>{

@@ -1,5 +1,6 @@
 /* Keep entered values on server errors and network failures. */
 document.querySelectorAll('form').forEach(form=>{
+  if(form.getAttribute('data-native-form')!=null)return;
   if((form.getAttribute('method')||'get').toLowerCase()!=='post')return;
   let sending=false,completed=false;
   const status=document.createElement('p');status.className='form-progress';status.setAttribute('role','status');form.append(status);
