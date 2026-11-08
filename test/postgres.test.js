@@ -47,7 +47,7 @@ test('PostgreSQL: parâmetros, schema privado, conflitos e sessões',async()=>{
       await request(app).get('/').expect(200);await request(app).get('/busca?q=teste').expect(200);
       const agent=request.agent(app),page=await agent.get('/admin/login').expect(200),csrf=page.text.match(/name="_csrf" value="([^"]+)"/)[1];
       await agent.post('/admin/login').type('form').send({_csrf:csrf,email:'EDITOR@example.test',password:'Senha de teste PostgreSQL!'}).expect(302);
-      await agent.get('/admin').expect(200);await agent.get('/admin/publicidade').expect(200);await agent.get('/admin/audiencia').expect(200);await agent.get('/admin/automacao').expect(200);await agent.get('/admin/automacao?status=published-review').expect(200);
+      await agent.get('/admin').expect(200);await agent.get('/admin/publicidade').expect(200);await agent.get('/admin/audiencia').expect(200);await agent.get('/admin/instagram').expect(200);await agent.get('/admin/automacao').expect(200);await agent.get('/admin/automacao?status=published-review').expect(200);
     }finally{local.close();rmSync(directory,{recursive:true,force:true});}
   }finally{await db.close();}
 });

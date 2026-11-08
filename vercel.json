@@ -2,10 +2,10 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "express",
   "installCommand": "npm ci --omit=dev",
-  "buildCommand": "node scripts/deploy-media.js && node scripts/check-editorial.js",
+  "buildCommand": "node scripts/deploy-media.js && node scripts/instagram-storage.js && node scripts/check-editorial.js",
   "functions": {
     "index.js": {
-      "includeFiles": "views/**",
+      "includeFiles": "{views/**,public/fonts/**,public/images/giro63-logo-branca.webp}",
       "excludeFiles": "{data,backups,exports,public/uploads,migration-assets}/**",
       "maxDuration": 60
     }

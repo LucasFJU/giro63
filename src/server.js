@@ -1,3 +1,6 @@
+import {waitUntil} from '@vercel/functions';
+import {mountInstagram} from './instagram.js';
+import {syncInstagramArticle} from './instagram-jobs.js';
 import {directoryData} from './admin-directory.js';
 import {contentHash,parseCodes,issueLabels,pendingCodes,factIssues,imageEligible,publicationError} from './publication-policy.js';
 import {initializeEditorial} from './editorial-schema.js';
@@ -24,7 +27,7 @@ import { SQLiteSessionStore, csrf, checkCsrf, cleanBody, safeUrl } from './secur
 
 export const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const labels = {draft:'Rascunho',review:'Em revisão',published:'Publicado'};
-export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(root,'data'),uploadDir=path.join(root,'public','uploads'),seed=false,database=null,suggestedImageReader=readSuggestedImage,discoverArticleImage=discoverImage}={}) {
+export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(root,'data'),uploadDir=path.join(root,'public','uploads'),seed=false,database=null,suggestedImageReader=readSuggestedImage,discoverArticleImage=discoverImage,instagramMeta,instagramStore}={}) {
   const cloud=!!process.env.DATABASE_URL;
   const uploadLimitMb=cloud?4:8;
   const upload=multer({storage:multer.memoryStorage(),limits:{fileSize:uploadLimitMb*1024*1024,files:1,fields:80,fieldSize:250000}}).single('image');
@@ -43,7 +46,9 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
   app.use('/uploads',express.static(uploadDir,{dotfiles:'deny',setHeaders:res=>res.setHeader('X-Content-Type-Options','nosniff')}));
   app.use(express.static(path.join(root,'public'),{dotfiles:'deny'}));
   app.use(express.urlencoded({extended:false,limit:'300kb'}));
-  app.use(session({name:'giro63.sid',secret:cloud?process.env.SESSION_SECRET:readFileSync(secretFile,'utf8'),store:new SQLiteSessionStore(db),resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:'strict',secure:cloud,maxAge:8*3600000}}));
+  const panelSession=session({name:'giro63.sid',secret:cloud?process.env.SESSION_SECRET:readFileSync(secretFile,'utf8'),store:new SQLiteSessionStore(db),resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:'strict',secure:cloud,maxAge:8*3600000}});
+  // OAuth uses a one-use DB state. Do not overwrite the existing Strict panel cookie on a cross-site callback.
+  app.use((req,res,next)=>{if(req.path==='/integracoes/instagram/callback'){req.session={};return next();}return panelSession(req,res,next);});
   app.use(async (req,res,next)=>{
     res.locals.uploadLimitMb=uploadLimitMb;
     res.locals.settings=Object.fromEntries((await db.prepare('SELECT * FROM settings').all()).map(r=>[r.key,r.value]));
@@ -79,6 +84,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
     res.render('listing',{title:heading,heading,intro,articles,page,pages:Math.ceil(total/pageSize),total,q,categoryFilter,cityFilter,pageLink,base:req.path});
   }
   mountTags(app,{db,requireUser,editor,checkCsrf,listing});
+  await mountInstagram(app,{db,requireUser,editor,checkCsrf,dataDir,readImage:imageBuffer,secret:cloud?process.env.SESSION_SECRET:readFileSync(secretFile,'utf8'),background:process.env.VERCEL_ENV==='production',waitUntil,meta:instagramMeta,storage:instagramStore});
   mountAutomation(app,{db,requireUser,editor,checkCsrf});
   app.get('/ultimas',async (req,res)=>(await listing(req,res,{heading:'Últimas notícias',intro:'Acompanhe o Tocantins, uma história de cada vez.'})));
   app.get('/editoria/:slug',async (req,res,next)=>{const cat=res.locals.categories.find(c=>c[0]===req.params.slug);if(!cat)return next();(await listing(req,res,{heading:cat[1],where:'category=?',params:[cat[0]],intro:'Contexto e informação sobre o que faz parte da sua vida.'}));});
@@ -142,7 +148,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
       if(operation==='restaurar')await db.prepare("UPDATE articles SET archived_at='',deleted_at='',status='draft',featured=0,updated_at=? WHERE id=?").run(stamp,id);
       else if(operation==='excluir')await db.prepare("UPDATE articles SET deleted_at=?,status='draft',featured=0,updated_at=? WHERE id=?").run(stamp,stamp,id);
       else if(!item.deleted_at)await db.prepare("UPDATE articles SET archived_at=?,status='draft',featured=0,updated_at=? WHERE id=?").run(stamp,stamp,id);
-      await db.prepare("UPDATE automation_items SET state='review' WHERE article_id=? AND state='published'").run(id);
+      await db.prepare("UPDATE automation_items SET state='review' WHERE article_id=? AND state='published'").run(id);await syncInstagramArticle(db,id,{inTransaction:true});
       return 302;
     });if(result!==302)return res.sendStatus(result);
     flash(req,operation==='excluir'?'Matéria enviada para a lixeira. Pode ser restaurada.':operation==='arquivar'?'Matéria arquivada e retirada do site.':'Matéria restaurada como rascunho.');res.redirect('/admin/materias'+(operation==='excluir'?'?status=trash':operation==='arquivar'?'?status=archived':''));
@@ -260,8 +266,10 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
         else (await db.prepare('INSERT INTO articles(title,summary,body,category,city,byline,cover,cover_alt,credit,sources,status,featured,urgent,demo,feedback,updated_at,published_at,slug,author_id,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(...values,slug,res.locals.user.id,now));
         const taggedId=old?.id||(await db.prepare('SELECT id FROM articles WHERE slug=?').get(slug)).id;await db.prepare('DELETE FROM article_tags WHERE article_id=?').run(taggedId);await assignTags(db,taggedId,a.tags);
         await db.prepare('UPDATE articles SET photo_photographer=?,photo_source=?,photo_source_url=?,photo_license=?,photo_caption=?,photo_x=?,photo_y=?,photo_cover=?,photo_thumb=?,photo_share=? WHERE id=?').run(a.photo_photographer,a.photo_source,a.photo_source_url,a.photo_license,a.photo_caption,a.photo_x,a.photo_y,a.photo_cover||'',a.photo_thumb||'',a.photo_share||'',taggedId);
+        await syncInstagramArticle(db,taggedId,{becamePublished:desired==='published'&&old?.status!=='published',userId:res.locals.user.id,inTransaction:true});
         if(selected){const approved=await db.prepare("UPDATE article_image_suggestions SET status='approved',reviewed_by=?,reviewed_at=?,photographer=?,source=?,license=?,caption=?,alt=? WHERE id=? AND status='pending'").run(res.locals.user.id,now,photo.photo_photographer,photo.photo_source,photo.photo_license,photo.photo_caption,a.cover_alt,selected.id);if(!approved.changes)throw Error('Sugestão já revisada por outro editor. Reabra a matéria.');}
       });
+      app.locals.kickInstagram();
       const savedId=old?.id||(await db.prepare('SELECT id FROM articles WHERE slug=?').get(slug)).id;
       flash(req,desired==='published'?'Matéria publicada no portal.':desired==='review'?'Matéria enviada para revisão.':'Rascunho salvo.');res.redirect(desired==='draft'?'/admin/noticias/'+savedId:'/admin/materias');
     }catch(e){if(e.publication)return res.status(400).render('edit',{title:'Revise a publicação',article:{...a,cover:old?.cover||'',photo_cover:old?.photo_cover||'',photo_thumb:old?.photo_thumb||'',photo_share:old?.photo_share||''},error:e.message+' Selecione novamente qualquer arquivo ainda não salvo.'});if(/sugestão|sugestões|aprovar|recortes|armazenar|ler a imagem/i.test(e.message))return res.status(400).render('edit',{title:'Revise a imagem',article:{...a,cover:old?.cover||'',photo_cover:old?.photo_cover||'',photo_thumb:old?.photo_thumb||'',photo_share:old?.photo_share||''},error:e.message});if(/image|Input|format|JPG|pixels|unsupported|corrupt/i.test(e.message))return res.status(400).render('edit',{title:'Verifique a imagem',article:{...a,cover:old?.cover||''},error:'Imagem inválida. Use JPG, PNG ou WebP estático dentro dos limites informados.'});next(e);}
