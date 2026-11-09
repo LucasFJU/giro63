@@ -62,15 +62,15 @@ export async function trimAutomationQueue(db,now=Date.now()){
     }
   });
 }
-export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews,key=process.env.GEMINI_API_KEY,now=Date.now(),findImage=discoverImage,readImage=readSuggestedImage,storeImage=null}={}){
+export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews,key=process.env.GEMINI_API_KEY,now=Date.now(),findImage=discoverImage,readImage=readSuggestedImage,storeImage=null,collect=true}={}){
   const settings=Object.fromEntries((await db.prepare("SELECT key,value FROM settings WHERE key IN ('automation_paused','automation_publish')").all()).map(x=>[x.key,x.value]));
-  if(settings.automation_paused!=='0')return {message:'Automação pausada.'};if(!key)return {message:'Configure GEMINI_API_KEY na Vercel.'};
+  if(settings.automation_paused!=='0')return {message:'Automação pausada.',hasMore:false};if(!key)return {message:'Configure GEMINI_API_KEY na Vercel.',hasMore:false};
   const owner=randomUUID(),lease=await db.prepare('INSERT INTO automation_lock(id,owner,expires_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET owner=excluded.owner,expires_at=excluded.expires_at WHERE automation_lock.expires_at<?').run('runner',owner,now+120000,now);
-  if(!lease.changes)return {message:'Uma execução já está em andamento.'};
+  if(!lease.changes)return {message:'Uma execução já está em andamento.',hasMore:false};
   const deadline=Date.now()+45000;let processed=0;
   try{
     const sources=await db.prepare('SELECT * FROM automation_sources WHERE active=1 AND approved=1 ORDER BY region DESC,id').all();
-    for(const source of sources){if(Date.now()>deadline-25000)break;try{await ingest(db,source,parseFeed(await readFeed(source.feed,source.hosts.split(',')),source.hosts.split(','),now),now);await db.prepare("UPDATE automation_sources SET last_error='' WHERE id=?").run(source.id);}catch(error){await db.prepare('UPDATE automation_sources SET last_error=? WHERE id=?').run(('Falha ao consultar ou validar o feed: '+String(error?.message||'erro desconhecido').replace(/\s+/g,' ').slice(0,160)),source.id);}}
+    if(collect)for(const source of sources){if(Date.now()>deadline-25000)break;try{await ingest(db,source,parseFeed(await readFeed(source.feed,source.hosts.split(',')),source.hosts.split(','),now),now);await db.prepare("UPDATE automation_sources SET last_error='' WHERE id=?").run(source.id);}catch(error){await db.prepare('UPDATE automation_sources SET last_error=? WHERE id=?').run(('Falha ao consultar ou validar o feed: '+String(error?.message||'erro desconhecido').replace(/\s+/g,' ').slice(0,160)),source.id);}}
     await db.prepare("UPDATE automation_items SET state=CASE WHEN attempts<2 THEN 'failed' ELSE 'review' END,note='Execução anterior interrompida.' WHERE state='processing' AND updated_at<?").run(new Date(now-120000).toISOString());
     await trimAutomationQueue(db,now);
     const selected=await selectAutomationItem(db,now),queue=selected?[selected]:[];
@@ -95,7 +95,7 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
           const issues=result.issues||splitIssues([...(result.alerts.length?['UNKNOWN_ALERT']:[]),...(result.sensitive?['SENSITIVE']:[]),...(result.tags.length?['TAGS']:[]),...(!result.city?['CITY_ABSENT']:[])]);
           issues.pending=[...new Set([...issues.pending,...parseCodes(item.review_reasons)])];
           if(!permitted.approved||!permitted.active)issues.blockers.push('SOURCE_UNAUTHORIZED');
-          // Only verified own Agência Brasil photography can be imported without editor approval.
+          // Credited photographs can carry a separate pending editorial review.
           if(!approvedImage)issues.blockers.push('IMAGE_PENDING');
           else if(!automaticImageEligible(suggestedImage))issues.pending.push('PHOTO_REVIEW');
           const publish=!!approvedImage&&!issues.blockers.length&&pause?.value==='0'&&publishing?.value==='1'&&await reservePublication(db,item.region==='regional',now);
@@ -107,11 +107,14 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
           await db.prepare('UPDATE automation_items SET state=?,article_id=?,note=?,updated_at=?,policy_version=1,blockers=?,review_reasons=?,review_pending=? WHERE id=?').run(publish?'published':'review',saved.lastInsertRowid,[...result.alerts,...issues.blockers.map(c=>issueLabels[c]||issueLabels.UNKNOWN_ALERT)].join(' · '),stamp,JSON.stringify([...new Set(issues.blockers)]),JSON.stringify(issues.pending),issues.pending.length?1:0,item.id);
           if(approvedImage)await db.prepare('UPDATE automation_items SET approved_cover=?,publication_counted=? WHERE id=?').run(approvedImage,publish?1:0,item.id);
           if(publish)await event(db,'Publicação automática: '+item.id+' · '+item.region,now);
+          else await event(db,'Item em revisão: '+item.id+' · '+[...new Set(issues.blockers)].join(', ')+'; seguindo para outro candidato elegível.',now);
           await syncInstagramArticle(db,saved.lastInsertRowid,{inTransaction:true});
         });processed++;
       }catch(error){await db.prepare('UPDATE automation_items SET state=?,note=?,updated_at=?,policy_version=1,blockers=? WHERE id=?').run(item.attempts+1>=2?'review':'failed',/Gemini|JSON|Campos|Texto/.test(error.message)?error.message.slice(0,200):error.name==='TimeoutError'?'Gemini excedeu o prazo de 35 segundos.':'Falha no processamento. Nova tentativa limitada.',new Date(now).toISOString(),JSON.stringify(['GENERATION_FAILED']),item.id);}
     }
-    await event(db,'Execução concluída. Itens processados: '+processed,now);return {message:'Execução concluída.',processed};
+    await trimAutomationQueue(db,now);
+    const hasMore=!!(await selectAutomationItem(db,now));
+    await event(db,'Execução concluída. Itens processados: '+processed,now);return {message:'Execução concluída.',processed,hasMore};
   }finally{await db.prepare('DELETE FROM automation_lock WHERE id=? AND owner=?').run('runner',owner);}
 }
 export function mountAutomation(app,{db,requireUser,editor,checkCsrf,storeImage}){
@@ -185,6 +188,6 @@ export function mountAutomation(app,{db,requireUser,editor,checkCsrf,storeImage}
   });
   app.post('/admin/automacao/itens/:id/descartar',requireUser,editor,checkCsrf,async(req,res)=>{await db.prepare("UPDATE automation_items SET state='discarded',note='Descartado pela redação.' WHERE id=? AND state<>'published'").run(req.params.id);res.redirect('/admin/automacao');});
   app.post('/internal/automation/run',async(req,res)=>{
-    const expected=Buffer.from(process.env.AUTOMATION_SECRET||''),supplied=Buffer.from(String(req.get('authorization')||'').replace(/^Bearer /,''));const staticAuth=expected.length>=32&&expected.length===supplied.length&&timingSafeEqual(expected,supplied);if(!staticAuth&&!await authorizeWorkflow(db,supplied.toString()))return res.sendStatus(401);res.set('Cache-Control','no-store').json(await runAutomation(db,{storeImage}));
+    const expected=Buffer.from(process.env.AUTOMATION_SECRET||''),supplied=Buffer.from(String(req.get('authorization')||'').replace(/^Bearer /,''));const staticAuth=expected.length>=32&&expected.length===supplied.length&&timingSafeEqual(expected,supplied);if(!staticAuth&&!await authorizeWorkflow(db,supplied.toString()))return res.sendStatus(401);res.set('Cache-Control','no-store').json(await runAutomation(db,{storeImage,collect:req.query.collect!=='0'}));
   });
 }
