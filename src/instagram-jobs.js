@@ -29,13 +29,14 @@ export async function syncInstagramArticle(db,id,{becamePublished=false,userId=n
   await socialEvent(db,postId,'Preparação criada; não equivale a autorização de envio.');return db.prepare('SELECT * FROM instagram_posts WHERE id=?').get(postId);
  };return inTransaction?action():transaction(db,action);
 }
+export const instagramArtAssetVersion=post=>digest(JSON.stringify(['art-v5-clean-footer',post.art_template,post.source_version,post.headline,post.standfirst,post.photo_x,post.photo_y]));
 export async function prepareInstagramArt(db,post,storage,readImage){
  const a=await socialArticle(db,post.article_id);if(!a||!a.cover)throw Error('Escolha uma imagem de capa para preparar as artes. A autorização para envio é conferida separadamente.');
  if(a.archived_at||a.deleted_at||!['review','published'].includes(a.status))throw Error('Esta matéria não está disponível para preparação.');
  if(post.source_version!==sourceVersion(a))throw Error('A matéria mudou. Atualize a preparação.');
  const category=(await db.prepare('SELECT name FROM editorial_categories WHERE slug=?').get(a.category))?.name||a.category;
  const settings=await socialSettings(db),site=new URL(settings.public_url||'https://giro63.vercel.app').hostname;
- const image=await readImage(a.cover),files={},assetVersion=digest(JSON.stringify(['art-v4-curves-palette',post.art_template,site,post.source_version,post.headline,post.standfirst,post.photo_x,post.photo_y]));
+ const image=await readImage(a.cover),files={},assetVersion=instagramArtAssetVersion(post);
  for(const format of ['feed','fallback','story']){const bytes=await renderInstagramArt({image,headline:post.headline,standfirst:post.standfirst,category,x:post.photo_x,y:post.photo_y,format,site,template:post.art_template});files[format]=await storage.save(post.id+'/'+assetVersion+'-'+format+'.jpg',bytes);}
  const latest=await db.prepare('SELECT * FROM instagram_posts WHERE id=?').get(post.id);if(latest.updated_at!==post.updated_at||latest.source_version!==post.source_version)throw Error('A preparação mudou durante a geração. Gere novamente.');
  await db.prepare("UPDATE instagram_posts SET feed_path=?,fallback_path=?,story_path=?,prepared_at=?,generated_template=art_template,error='' WHERE id=? AND source_version=?").run(files.feed,files.fallback,files.story,new Date().toISOString(),post.id,post.source_version);return files;

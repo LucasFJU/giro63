@@ -3,7 +3,7 @@ import {transaction} from './postgres.js';
 import {initializeInstagram} from './instagram-schema.js';
 import {instagramStorage} from './instagram-storage.js';
 import {metaClient,sealToken} from './instagram-meta.js';
-import {syncInstagramArticle,prepareInstagramArt,runInstagram,socialArticle,socialSettings,socialEvent} from './instagram-jobs.js';
+import {syncInstagramArticle,prepareInstagramArt,instagramArtAssetVersion,runInstagram,socialArticle,socialSettings,socialEvent} from './instagram-jobs.js';
 import {articleLink,photoVersion,sourceVersion,socialImageReady,eligibility} from './instagram-content.js';
 import {authorizeWorkflow} from './workflow-auth.js';
 export const socialLabels={prepared:'Preparado',waiting:'Aguardando liberação',creating:'Preparando envio',ready:'Na fila',publishing:'Enviando',published:'Publicado',error:'Erro',uncertain:'Conferir no Instagram',cancelled:'Cancelado'};
@@ -16,7 +16,11 @@ export async function mountInstagram(app,{db,requireUser,editor,checkCsrf,dataDi
  async function article(req,res){const id=Number(req.params.id);if(!Number.isSafeInteger(id))return null;const a=await socialArticle(db,id);if(!a||a.archived_at||a.deleted_at||!['review','published'].includes(a.status)){res.status(409).render('error',{title:'Matéria indisponível',message:'Prepare Instagram apenas para matérias em revisão ou publicadas.'});return null;}if(res.locals.user.role!=='editor'&&a.author_id!==res.locals.user.id){res.sendStatus(403);return null;}return a;}
  const editorPage=async(req,res,error='')=>{
   const a=await article(req,res);if(!a)return;
-  const post=await db.prepare('SELECT * FROM instagram_posts WHERE article_id=?').get(a.id),settings=await socialSettings(db),connection=await db.prepare("SELECT username,account_type,expires_at FROM instagram_connection WHERE id='main'").get();
+  let post=await db.prepare('SELECT * FROM instagram_posts WHERE article_id=?').get(a.id);const settings=await socialSettings(db),connection=await db.prepare("SELECT username,account_type,expires_at FROM instagram_connection WHERE id='main'").get();
+  if(req.method==='GET'&&post?.feed_path&&!post.feed_path.includes(instagramArtAssetVersion(post))&&post.source_version===sourceVersion(a)){
+   const protectedDelivery=await db.prepare("SELECT target FROM instagram_deliveries WHERE post_id=? AND state IN ('published','publishing','uncertain') LIMIT 1").get(post.id);
+   if(!protectedDelivery){try{await prepareInstagramArt(db,post,storage,readImage);post=await db.prepare('SELECT * FROM instagram_posts WHERE id=?').get(post.id);}catch{error='Não foi possível atualizar as artes anteriores. Confira os textos e clique em Salvar e gerar artes.';}}
+  }
   res.render('instagram-edit',{title:'Instagram da matéria',article:a,post:req.method==='POST'&&req.path.endsWith('/salvar')&&post?{...post,...Object.fromEntries(['caption','headline','standfirst','rights_note','art_template','photo_x','photo_y'].filter(k=>typeof req.body[k]==='string').map(k=>[k,req.body[k]]))}:post,error,link:articleLink(a,settings.public_url||'https://giro63.vercel.app'),deliveries:post?await db.prepare('SELECT * FROM instagram_deliveries WHERE post_id=? ORDER BY target').all(post.id):[],socialLabels,blocked:post?eligibility(a,post,settings.instagram_mode,connection):'',stale:post&&post.source_version!==sourceVersion(a),rightsValid:post&&post.rights_version===photoVersion(a),events:post?await db.prepare('SELECT created_at,message FROM instagram_events WHERE post_id=? ORDER BY created_at DESC LIMIT 10').all(post.id):[]});
  };
  app.get('/admin/instagram',requireUser,editor,async(req,res)=>{

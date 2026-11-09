@@ -20,9 +20,7 @@ async function renderEditorial({image,headline,standfirst,category,x,y,format,si
  svg+='<rect x="80" y="'+(710+shift)+'" width="'+lw+'" height="52" rx="26" fill="#ed521a"/>'+paths(label,bold,27,104,745+shift,'#fff');let baseline=titleTop+size;
  for(const line of titleLines){svg+=paths(line,serif,size,80,baseline,ink);baseline+=size*1.1;}
  baseline+=20;for(const line of summaryLines){svg+=paths(line,sans,30,80,baseline,ink);baseline+=39;}
- svg+='<rect x="80" y="'+(baseline+8)+'" width="130" height="6" rx="3" fill="#ed521a"/>';
- const cta='Leia no Giro63 | '+site;if(width(cta,sans,25)>660)throw Error('Endereço longo para a arte.');
- svg+='<path d="M326 '+(footer-40)+' V'+(footer+4)+'" stroke="#ed521a" stroke-width="3"/>'+paths(cta,sans,25,1000-width(cta,sans,25),footer-7,ink)+'</svg>';
+ svg+='</svg>';
  const brand=await sharp(light?readFileSync(new URL('images/giro63-logo-oficial.png',root)):logo).trim().resize({width:220,height:64,fit:'inside'}).png().toBuffer();
  return sharp({create:{width:1080,height,channels:3,background:bg}}).composite([{input:photo,left:0,top:0},{input:Buffer.from(svg)},{input:brand,left:80,top:footer-48}]).jpeg({quality:90,chromaSubsampling:'4:4:4'}).toBuffer();
 }
