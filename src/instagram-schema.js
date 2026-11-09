@@ -7,6 +7,6 @@ CREATE INDEX IF NOT EXISTS instagram_pending ON instagram_deliveries(state,next_
 CREATE TABLE IF NOT EXISTS instagram_events(id TEXT PRIMARY KEY,post_id TEXT REFERENCES instagram_posts(id),created_at TEXT NOT NULL,message TEXT NOT NULL);
 `;
 export async function initializeInstagram(db){
- if(db.dialect!=='postgres')await db.exec(instagramSchema);
+ if(db.dialect!=='postgres'){await db.exec(instagramSchema);const columns=new Set((await db.prepare('PRAGMA table_info(instagram_posts)').all()).map(c=>c.name));for(const name of ['art_template','generated_template'])if(!columns.has(name))await db.exec("ALTER TABLE instagram_posts ADD COLUMN "+name+" TEXT NOT NULL DEFAULT 'overlay'");}
  for(const [key,value] of [['instagram_mode','prepare'],['instagram_activated_at',''],['instagram_test_verified','0']])await db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT DO NOTHING').run(key,value);
 }

@@ -5,7 +5,7 @@
   "buildCommand": "node scripts/deploy-media.js && node scripts/instagram-storage.js && node scripts/check-editorial.js",
   "functions": {
     "index.js": {
-      "includeFiles": "{views/**,public/fonts/**,public/images/giro63-logo-branca.webp}",
+      "includeFiles": "{views/**,public/fonts/**,public/images/giro63-logo-branca.webp,public/images/giro63-logo-oficial.png}",
       "excludeFiles": "{data,backups,exports,public/uploads,migration-assets}/**",
       "maxDuration": 60
     }
