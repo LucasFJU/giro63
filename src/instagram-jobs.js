@@ -10,9 +10,9 @@ export async function syncInstagramArticle(db,id,{becamePublished=false,userId=n
  const action=async()=>{
   if(db.dialect==='postgres')await db.prepare('SELECT pg_advisory_xact_lock(6363)').get();
   const a=await socialArticle(db,id),old=await db.prepare('SELECT * FROM instagram_posts WHERE article_id=?').get(id);if(!a)return null;
-  if(a.archived_at||a.deleted_at||!['published','review'].includes(a.status)||a.demo){if(old){await db.prepare('UPDATE instagram_posts SET cancelled=CASE WHEN cancelled=1 THEN 1 ELSE 2 END,test_requested=0 WHERE id=?').run(old.id);await db.prepare("UPDATE instagram_deliveries SET state='cancelled' WHERE post_id=? AND state NOT IN ('published','publishing','uncertain')").run(old.id);}return old;}
+  if(a.archived_at||a.deleted_at||!['published','review'].includes(a.status)){if(old){await db.prepare('UPDATE instagram_posts SET cancelled=CASE WHEN cancelled=1 THEN 1 ELSE 2 END,test_requested=0 WHERE id=?').run(old.id);await db.prepare("UPDATE instagram_deliveries SET state='cancelled' WHERE post_id=? AND state NOT IN ('published','publishing','uncertain')").run(old.id);}return old;}
   const settings=await socialSettings(db),stamp=new Date().toISOString(),version=sourceVersion(a),candidate=becamePublished&&settings.instagram_mode==='auto'&&!!settings.instagram_activated_at&&Date.parse(a.published_at)>=Date.parse(settings.instagram_activated_at)?1:0;
-  const safeCaption=tags=>{try{return {caption:captionFor(a,articleLink(a,settings.public_url),tags),error:''};}catch{return {caption:'',error:'Legenda longa ou URL pública ausente. Ajuste o material social no painel.'};}};
+  const safeCaption=tags=>{try{return {caption:captionFor(a,articleLink(a,settings.public_url||'https://giro63.vercel.app'),tags),error:''};}catch{return {caption:'',error:'Legenda longa ou URL pública ausente. Ajuste o material social no painel.'};}};
   if(old){
    const sent=await db.prepare("SELECT target FROM instagram_deliveries WHERE post_id=? AND state IN ('published','publishing','uncertain')").all(old.id);
    if(Number(old.cancelled)===2&&!sent.length){await db.prepare('UPDATE instagram_posts SET cancelled=0 WHERE id=?').run(old.id);await db.prepare("UPDATE instagram_deliveries SET state='prepared' WHERE post_id=? AND state='cancelled'").run(old.id);}
@@ -24,22 +24,21 @@ export async function syncInstagramArticle(db,id,{becamePublished=false,userId=n
    return db.prepare('SELECT * FROM instagram_posts WHERE id=?').get(old.id);
   }
   const tags=await db.prepare('SELECT t.name FROM tags t JOIN article_tags a ON a.tag_slug=t.slug WHERE a.article_id=? ORDER BY t.name').all(id),postId=randomUUID();
-  await db.prepare('INSERT INTO instagram_posts(id,article_id,source_version,headline,standfirst,caption,auto_candidate,prepared_by,updated_at,error) VALUES(?,?,?,?,?,?,?,?,?,?)').run(postId,id,version,a.title,a.summary,safeCaption(tags).caption,candidate,userId,stamp,safeCaption(tags).error);
+  await db.prepare('INSERT INTO instagram_posts(id,article_id,source_version,headline,standfirst,caption,auto_candidate,prepared_by,updated_at,error,art_template) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(postId,id,version,a.title,a.summary,safeCaption(tags).caption,candidate,userId,stamp,safeCaption(tags).error,'navy');
   for(const target of ['feed','story'])await db.prepare('INSERT INTO instagram_deliveries(post_id,target,ratio,updated_at) VALUES(?,?,?,?)').run(postId,target,target==='feed'?'3:4':'9:16',stamp);
   await socialEvent(db,postId,'Preparação criada; não equivale a autorização de envio.');return db.prepare('SELECT * FROM instagram_posts WHERE id=?').get(postId);
  };return inTransaction?action():transaction(db,action);
 }
 export async function prepareInstagramArt(db,post,storage,readImage){
- const a=await socialArticle(db,post.article_id);if(!a||!socialImageReady(a))throw Error('Confira a foto, crédito, origem, licença e descrição antes de preparar as artes.');
- if(a.archived_at||a.deleted_at||a.demo||!['review','published'].includes(a.status))throw Error('Esta matéria não está disponível para preparação.');
+ const a=await socialArticle(db,post.article_id);if(!a||!a.cover)throw Error('Escolha uma imagem de capa para preparar as artes. A autorização para envio é conferida separadamente.');
+ if(a.archived_at||a.deleted_at||!['review','published'].includes(a.status))throw Error('Esta matéria não está disponível para preparação.');
  if(post.source_version!==sourceVersion(a))throw Error('A matéria mudou. Atualize a preparação.');
  const category=(await db.prepare('SELECT name FROM editorial_categories WHERE slug=?').get(a.category))?.name||a.category;
- const source=(await db.prepare('SELECT s.name FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.article_id=?').get(a.id))?.name||'';
- const settings=await socialSettings(db),site=new URL(settings.public_url).hostname;
- const image=await readImage(a.cover),files={},assetVersion=digest(JSON.stringify([post.source_version,post.headline,post.standfirst,post.photo_x,post.photo_y]));
- for(const format of ['feed','fallback','story']){const bytes=await renderInstagramArt({image,headline:post.headline,standfirst:post.standfirst,category,credit:a.credit,source,x:post.photo_x,y:post.photo_y,format,site});files[format]=await storage.save(post.id+'/'+assetVersion+'-'+format+'.jpg',bytes);}
+ const settings=await socialSettings(db),site=new URL(settings.public_url||'https://giro63.vercel.app').hostname;
+ const image=await readImage(a.cover),files={},assetVersion=digest(JSON.stringify(['art-v4-curves-palette',post.art_template,site,post.source_version,post.headline,post.standfirst,post.photo_x,post.photo_y]));
+ for(const format of ['feed','fallback','story']){const bytes=await renderInstagramArt({image,headline:post.headline,standfirst:post.standfirst,category,x:post.photo_x,y:post.photo_y,format,site,template:post.art_template});files[format]=await storage.save(post.id+'/'+assetVersion+'-'+format+'.jpg',bytes);}
  const latest=await db.prepare('SELECT * FROM instagram_posts WHERE id=?').get(post.id);if(latest.updated_at!==post.updated_at||latest.source_version!==post.source_version)throw Error('A preparação mudou durante a geração. Gere novamente.');
- await db.prepare("UPDATE instagram_posts SET feed_path=?,fallback_path=?,story_path=?,prepared_at=?,error='' WHERE id=? AND source_version=?").run(files.feed,files.fallback,files.story,new Date().toISOString(),post.id,post.source_version);return files;
+ await db.prepare("UPDATE instagram_posts SET feed_path=?,fallback_path=?,story_path=?,prepared_at=?,generated_template=art_template,error='' WHERE id=? AND source_version=?").run(files.feed,files.fallback,files.story,new Date().toISOString(),post.id,post.source_version);return files;
 }
 export async function runInstagram(db,{storage,readImage,meta,secret,allowPublish=process.env.VERCEL_ENV==='production',now=Date.now()}={}){
  const deadline=Date.now()+45000,owner=randomUUID(),lease=await db.prepare('INSERT INTO automation_lock(id,owner,expires_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET owner=excluded.owner,expires_at=excluded.expires_at WHERE automation_lock.expires_at<?').run('instagram-runner',owner,now+180000,now);if(!lease.changes)return {message:'Uma execução do Instagram está em andamento.'};
@@ -70,7 +69,7 @@ export async function runInstagram(db,{storage,readImage,meta,secret,allowPublis
     let publishing=false;
     try{
      let id=d.container_id;
-     if(!id){const file=d.target==='story'?post.story_path:d.ratio==='4:5'?post.fallback_path:post.feed_path;const url=await storage.signedUrl(file);const current=await socialArticle(db,a.id),latest=await db.prepare('SELECT * FROM instagram_posts WHERE id=?').get(post.id);if(eligibility(current,latest,(await socialSettings(db)).instagram_mode,connection,now)||JSON.stringify([latest.caption,latest.headline,latest.standfirst,latest.photo_x,latest.photo_y])!==JSON.stringify([post.caption,post.headline,post.standfirst,post.photo_x,post.photo_y]))continue;
+     if(!id){const file=d.target==='story'?post.story_path:d.ratio==='4:5'?post.fallback_path:post.feed_path;const url=await storage.signedUrl(file);const current=await socialArticle(db,a.id),latest=await db.prepare('SELECT * FROM instagram_posts WHERE id=?').get(post.id);if(eligibility(current,latest,(await socialSettings(db)).instagram_mode,connection,now)||JSON.stringify([latest.art_template,latest.caption,latest.headline,latest.standfirst,latest.photo_x,latest.photo_y])!==JSON.stringify([post.art_template,post.caption,post.headline,post.standfirst,post.photo_x,post.photo_y]))continue;
       await db.prepare("UPDATE instagram_deliveries SET state='creating',attempts=attempts+1,updated_at=? WHERE post_id=? AND target=?").run(new Date(now).toISOString(),post.id,d.target);
       const created=await meta.create({accountId:connection.account_id,token,url,caption:post.caption,target:d.target,alt:a.cover_alt});if(!/^\d+$/.test(String(created.id)))throw Error('Resposta inválida da Meta.');id=String(created.id);
       await db.prepare("UPDATE instagram_deliveries SET container_id=?,state='ready' WHERE post_id=? AND target=?").run(id,post.id,d.target);
@@ -78,7 +77,7 @@ export async function runInstagram(db,{storage,readImage,meta,secret,allowPublis
      if(Date.now()>deadline-15000)break;
      const status=await meta.status(id,token);if(status.status_code==='PUBLISHED'){await db.prepare("UPDATE instagram_deliveries SET state='published',error='' WHERE post_id=? AND target=?").run(post.id,d.target);continue;}
      if(status.status_code!=='FINISHED'){if(['ERROR','EXPIRED'].includes(status.status_code)){await db.prepare("UPDATE instagram_deliveries SET state='error',attempts=attempts+1,error='A Meta não processou a arte. Tente novamente no painel.',next_attempt_at=? WHERE post_id=? AND target=?").run(now+3600000,post.id,d.target);}continue;}
-     const current=await socialArticle(db,a.id),latest=await db.prepare('SELECT * FROM instagram_posts WHERE id=?').get(post.id);if(eligibility(current,latest,(await socialSettings(db)).instagram_mode,connection,now)||JSON.stringify([latest.caption,latest.headline,latest.standfirst,latest.photo_x,latest.photo_y])!==JSON.stringify([post.caption,post.headline,post.standfirst,post.photo_x,post.photo_y]))continue;
+     const current=await socialArticle(db,a.id),latest=await db.prepare('SELECT * FROM instagram_posts WHERE id=?').get(post.id);if(eligibility(current,latest,(await socialSettings(db)).instagram_mode,connection,now)||JSON.stringify([latest.art_template,latest.caption,latest.headline,latest.standfirst,latest.photo_x,latest.photo_y])!==JSON.stringify([post.art_template,post.caption,post.headline,post.standfirst,post.photo_x,post.photo_y]))continue;
      if(Date.now()>deadline-15000)break;
      await db.prepare("UPDATE instagram_deliveries SET attempts=attempts+1,state='publishing',updated_at=? WHERE post_id=? AND target=?").run(new Date(now).toISOString(),post.id,d.target);publishing=true;
      const result=await meta.publish(connection.account_id,id,token);if(!/^\d+$/.test(String(result.id)))throw Error('Resposta de publicação não confirmada.');

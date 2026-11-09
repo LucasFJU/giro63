@@ -1,0 +1,14 @@
+import {createApp} from '../src/server.js';
+import {hashPassword} from '../src/db.js';
+import {randomBytes} from 'node:crypto';
+import {writeFileSync,readFileSync,existsSync} from 'node:fs';
+import path from 'node:path';
+for(const key of ['DATABASE_URL','SUPABASE_URL','SUPABASE_SECRET_KEY','VERCEL','VERCEL_ENV','INSTAGRAM_APP_ID','INSTAGRAM_APP_SECRET'])delete process.env[key];
+const directory=path.resolve('exports/design-preview');
+const app=await createApp({dataDir:directory,uploadDir:path.join(directory,'uploads'),seed:true});
+const password=existsSync('exports/local-design-access.json')?JSON.parse(readFileSync('exports/local-design-access.json','utf8')).password:randomBytes(12).toString('base64url'),email='redacao@local.test',db=app.locals.db;
+db.prepare("INSERT INTO users(name,email,password,role) VALUES('Redação local',?,?,'editor') ON CONFLICT(email) DO UPDATE SET password=excluded.password").run(email,hashPassword(password));
+db.prepare("UPDATE settings SET value='https://giro63.vercel.app' WHERE key='public_url'").run();
+db.prepare("UPDATE settings SET value='prepare' WHERE key='instagram_mode'").run();
+writeFileSync('exports/local-design-access.json',JSON.stringify({email,password}));
+app.listen(3001,'127.0.0.1',()=>console.log('Prévia local isolada: http://localhost:3001/admin — dados demonstrativos de desenvolvimento.'));

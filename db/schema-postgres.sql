@@ -106,3 +106,6 @@ REVOKE ALL ON giro63.instagram_deliveries FROM PUBLIC,anon,authenticated;
 
 ALTER TABLE giro63.instagram_events ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON giro63.instagram_events FROM PUBLIC,anon,authenticated;
+
+ALTER TABLE giro63.instagram_posts ADD COLUMN IF NOT EXISTS art_template TEXT NOT NULL DEFAULT 'overlay';
+ALTER TABLE giro63.instagram_posts ADD COLUMN IF NOT EXISTS generated_template TEXT NOT NULL DEFAULT 'overlay';

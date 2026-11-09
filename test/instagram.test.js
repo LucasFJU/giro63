@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtempSync,rmSync,readFileSync} from 'node:fs';import path from 'node:path';import os from 'node:os';import sharp from 'sharp';import request from 'supertest';
-import {openDatabase,hashPassword} from '../src/db.js';import {initializeEditorial} from '../src/editorial-schema.js';import {captionFor,sourceVersion,photoVersion,eligibility} from '../src/instagram-content.js';import {renderInstagramArt} from '../src/instagram-art.js';import {syncInstagramArticle,runInstagram} from '../src/instagram-jobs.js';import {sealToken,unsealToken,MetaFailure} from '../src/instagram-meta.js';import {createApp} from '../src/server.js';import {validWorkflow} from '../src/workflow-auth.js';
+import {openDatabase,hashPassword} from '../src/db.js';import {initializeEditorial} from '../src/editorial-schema.js';import {captionFor,sourceVersion,photoVersion,eligibility} from '../src/instagram-content.js';import {renderInstagramArt} from '../src/instagram-art.js';import {syncInstagramArticle,runInstagram,prepareInstagramArt} from '../src/instagram-jobs.js';import {sealToken,unsealToken,MetaFailure} from '../src/instagram-meta.js';import {createApp} from '../src/server.js';import {validWorkflow} from '../src/workflow-auth.js';
 const temp=()=>mkdtempSync(path.join(os.tmpdir(),'giro-instagram-')),secret='s'.repeat(64),stamp=()=>new Date().toISOString();
 async function fixture(){const dir=temp(),db=openDatabase(dir);await initializeEditorial(db);db.prepare("UPDATE settings SET value='https://giro63.vercel.app' WHERE key='public_url'").run();const id=Number(db.prepare("INSERT INTO articles(slug,title,summary,body,category,cover,credit,cover_alt,photo_photographer,photo_source,photo_source_url,photo_license,sources,status,created_at,updated_at,published_at) VALUES('social','Suspeito é detido em Palmas','Segundo a polícia, um suspeito foi detido em Palmas.','<p>Segundo a polícia, um suspeito foi detido em Palmas.</p>','seguranca','/images/palmas.jpg','Autora / Agência','Imagem de arquivo','Autora','Agência','https://example.org/foto','Autorização para teste','Agência — https://example.org/noticia','published',?,?,?)").run(stamp(),stamp(),stamp()).lastInsertRowid);return {dir,db,id,close(){db.close();rmSync(dir,{recursive:true,force:true});}};}
 const assets={save:async name=>name,signedUrl:async name=>'https://media.example/'+name,read:async()=>Buffer.from('jpeg')};
@@ -7,7 +7,7 @@ async function ready(f){const post=await syncInstagramArticle(f.db,f.id);f.db.pr
 async function connected(f){f.db.prepare("INSERT INTO users(id,name,email,password,role) VALUES(1,'Editor','editor@example.test','hash','editor') ON CONFLICT DO NOTHING").run();f.db.prepare("UPDATE settings SET value='auto' WHERE key='instagram_mode'").run();f.db.prepare("INSERT INTO instagram_connection VALUES('main','123','port.algiro63','BUSINESS',?,?,?)").run(sealToken('test-token',secret),Date.now()+60*86400000,stamp());}
 test('legenda é extrativa, mantém qualificadores, crédito e link; tokens são cifrados',()=>{
  const a={title:'Suspeito é detido',summary:'Segundo a polícia, o suspeito foi detido.',credit:'Autora / Agência',sources:'Agência — https://example.org'};
- const text=captionFor(a,'https://giro63.vercel.app/noticia/teste',[{name:'Segurança Pública'}]);assert.ok(text.includes(a.summary));assert.match(text,/Imagem: Autora/);assert.match(text,/#SegurançaPública/);assert.match(text,/Leia a matéria/);assert.throws(()=>captionFor({...a,sources:'a'.repeat(2300)},'https://example.org'),/2.200/);
+ const text=captionFor(a,'https://giro63.vercel.app/noticia/teste',[{name:'Segurança Pública'}]);assert.ok(text.includes(a.summary));assert.match(text,/Imagem: Autora/);assert.match(text,/#SegurançaPública/);assert.ok(text.endsWith('Link da matéria na íntegra nos stories.'));assert.doesNotMatch(text,/https?:\/\//);assert.throws(()=>captionFor({...a,sources:'a'.repeat(2300)},'https://example.org'),/2.200/);
  const cipher=sealToken('only-test-token',secret);assert.ok(!cipher.includes('only-test-token'));assert.equal(unsealToken(cipher,secret),'only-test-token');assert.throws(()=>unsealToken(cipher,'x'.repeat(64)));
 });
 test('artes são JPEG em 3:4, 4:5 e 9:16 com fontes locais; textos grandes são recusados',async()=>{
@@ -50,7 +50,11 @@ test('painel prepara artes privadas, valida autorização e bloqueia autores de 
  const login=async role=>{const agent=request.agent(server),r=await agent.get('/admin/login');await agent.post('/admin/login').type('form').send({_csrf:csrf(r),email:role+'@example.test',password:'Senha local Instagram teste!'}).expect(302);return agent;};const editor=await login('editor'),author=await login('author');
  await request(server).get('/admin/instagram').expect(302);await author.get('/admin/instagram').expect(403);const form=await editor.get('/admin/noticias/'+id+'/instagram').expect(200);assert.match(form.text,/Preparar legenda e artes/);assert.equal(db.prepare('SELECT count(*) n FROM instagram_posts').get().n,0);
  await editor.post('/admin/noticias/'+id+'/instagram/preparar').type('form').send({}).expect(403);await author.post('/admin/noticias/'+id+'/instagram/preparar').type('form').send({_csrf:csrf(await author.get('/admin/noticias/'+id+'/instagram'))}).expect(302);
- const preview=await editor.get('/admin/noticias/'+id+'/instagram').expect(200);assert.match(preview.text,/Copiar legenda/);await request(server).get('/admin/noticias/'+id+'/instagram/arte/feed').expect(302);const image=await editor.get('/admin/noticias/'+id+'/instagram/arte/feed').expect(200);assert.equal((await sharp(image.body).metadata()).width,1080);
+ const preview=await editor.get('/admin/noticias/'+id+'/instagram').expect(200);assert.match(preview.text,/Copiar legenda/);assert.match(preview.text,/id="social-crop"/);assert.doesNotMatch(preview.text,/<select name="photo_[xy]"/);
+ const cropPayload={_csrf:csrf(preview),caption:'Legenda de teste.',headline:'Notícia para redes',standfirst:'Informações atribuídas à fonte.',photo_x:'37',photo_y:'81',art_template:'navy'};
+ await editor.post('/admin/noticias/'+id+'/instagram/salvar').type('form').send(cropPayload).expect(302);assert.equal(db.prepare('SELECT photo_x FROM instagram_posts WHERE article_id=?').get(id).photo_x,37);
+ await editor.post('/admin/noticias/'+id+'/instagram/salvar').type('form').send({...cropPayload,photo_x:101}).expect(400);assert.equal(db.prepare('SELECT photo_x FROM instagram_posts WHERE article_id=?').get(id).photo_x,37);
+await request(server).get('/admin/noticias/'+id+'/instagram/arte/feed').expect(302);const image=await editor.get('/admin/noticias/'+id+'/instagram/arte/feed').expect(200);assert.equal((await sharp(image.body).metadata()).width,1080);
  db.prepare('UPDATE articles SET author_id=1').run();await author.get('/admin/noticias/'+id+'/instagram').expect(403);
  await editor.post('/admin/instagram/config').type('form').send({_csrf:csrf(preview),mode:'auto',test_verified:'on'}).expect(302);assert.equal(db.prepare("SELECT value FROM settings WHERE key='instagram_mode'").get().value,'prepare');
  assert.doesNotMatch((await editor.get('/admin/instagram').expect(200)).text,/token_cipher/);await request(server).post('/internal/instagram/run').expect(401);
@@ -66,4 +70,28 @@ test('OAuth consome estado uma vez, restringe a conta e não substitui a sessão
  const connection=db.prepare('SELECT * FROM instagram_connection').get();assert.equal(connection.username,'port.algiro63');assert.ok(!connection.token_cipher.includes('private-test-token'));assert.equal(db.prepare("SELECT value FROM settings WHERE key='instagram_mode'").get().value,'prepare');await agent.get('/admin/instagram').expect(200);
  wrong=true;const again=await agent.post('/admin/instagram/conectar').type('form').send({_csrf:csrf(await agent.get('/admin/instagram'))}).expect(302);await request(server).get('/integracoes/instagram/callback?state='+new URL(again.headers.location).searchParams.get('state')+'&code=testing-only').expect(400);assert.equal(db.prepare('SELECT username FROM instagram_connection').get().username,'port.algiro63');
  }finally{await new Promise(resolve=>server.close(resolve));db.close();rmSync(dir,{recursive:true,force:true});if(previous.id===undefined)delete process.env.INSTAGRAM_APP_ID;else process.env.INSTAGRAM_APP_ID=previous.id;if(previous.secret===undefined)delete process.env.INSTAGRAM_APP_SECRET;else process.env.INSTAGRAM_APP_SECRET=previous.secret;}
+});
+
+test('prepara matéria publicada sem licença social e mantém crédito apenas na legenda',async()=>{
+ const f=await fixture();try{
+ f.db.prepare("UPDATE articles SET photo_license='',photo_source_url='',photo_photographer='',photo_source='' WHERE id=?").run(f.id);
+ const a=f.db.prepare('SELECT * FROM articles WHERE id=?').get(f.id),post=await syncInstagramArticle(f.db,f.id);
+ assert.match(post.caption,/Imagem: Autora/);assert.doesNotMatch(post.caption,/https?:\/\//);
+ const saved=[];await prepareInstagramArt(f.db,post,{save:async(name,bytes)=>{saved.push(await sharp(bytes).metadata());return name;}},async()=>readFileSync(new URL('../public/images/palmas.jpg',import.meta.url)));
+ assert.equal(saved.length,3);assert.match(eligibility(a,post,'auto',{expires_at:Date.now()+10000}),/licença pendentes/);
+ const input={image:readFileSync(new URL('../public/images/palmas.jpg',import.meta.url)),headline:'Notícia do Giro63',standfirst:'Resumo editorial.',category:'Cidades'};
+ const first=await renderInstagramArt({...input,credit:'Autora A',source:'Veículo A'}),second=await renderInstagramArt({...input,credit:'Autora B',source:'Veículo B'});
+ assert.deepEqual(first,second,'crédito e veículo de origem não aparecem na arte');
+ }finally{f.close();}
+});
+
+test('dois modelos mantêm dimensões, rejeitam modelos inválidos e preservam faixa livre do story',async()=>{
+ const image=readFileSync(new URL('../public/images/palmas.jpg',import.meta.url));
+ for(const template of ['navy','light'])for(const [format,height] of [['feed',1440],['fallback',1350],['story',1920]]){
+ const output=await renderInstagramArt({image,headline:'Informação que aproxima o Tocantins',standfirst:'Resumo editorial com fatos verificados.',category:'Cidades',template,format});
+ const meta=await sharp(output).metadata();assert.equal(meta.width,1080);assert.equal(meta.height,height);
+ if(format==='story'){const sample=await sharp(await sharp(output).extract({left:200,top:1485,width:600,height:100}).toBuffer()).stats();assert.ok(sample.channels.slice(0,3).every(c=>c.stdev<12),'área reservada sem texto ou botão');}
+ }
+ await assert.rejects(renderInstagramArt({image,template:'invalido'}),/Modelo inválido/);
+ const f=await fixture();try{const post=await syncInstagramArticle(f.db,f.id);assert.equal(post.art_template,'navy');f.db.prepare("UPDATE instagram_posts SET art_template='light' WHERE id=?").run(post.id);assert.equal((await syncInstagramArticle(f.db,f.id)).art_template,'light');}finally{f.close();}
 });

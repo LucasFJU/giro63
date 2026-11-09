@@ -1,0 +1,2 @@
+export function cropGeometry(width,height,frameWidth,frameHeight){const scale=Math.max(frameWidth/width,frameHeight/height);const w=Math.ceil(width*scale),h=Math.ceil(height*scale);return {width:w,height:h,overflowX:w-frameWidth,overflowY:h-frameHeight};}
+export function dragPosition(start,dx,dy,geometry){const clamp=v=>Math.max(0,Math.min(100,Math.round(v)));return {x:geometry.overflowX?clamp(start.x-dx/geometry.overflowX*100):start.x,y:geometry.overflowY?clamp(start.y-dy/geometry.overflowY*100):start.y};}

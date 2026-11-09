@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "preview:design": "node scripts/preview-design.js",
     "setup": "node scripts/setup.js",
     "test": "node --test --test-isolation=none --test-concurrency=1",
     "assets": "node scripts/assets.js && node scripts/brand.js",
