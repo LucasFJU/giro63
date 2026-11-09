@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "express",
   "installCommand": "npm ci --omit=dev",
-  "buildCommand": "node scripts/deploy-media.js && node scripts/instagram-storage.js && node scripts/check-editorial.js && node scripts/publish-reviewed-20261109.mjs",
+  "buildCommand": "node scripts/deploy-media.js && node scripts/instagram-storage.js && node scripts/check-editorial.js",
   "functions": {
     "index.js": {
       "includeFiles": "{views/**,public/fonts/**,public/images/giro63-logo-branca.webp,public/images/giro63-logo-oficial.png}",
