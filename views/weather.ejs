@@ -1,0 +1,11 @@
+<section class="weather" id="weather-widget" aria-labelledby="weather-title">
+ <div class="weather-heading"><span class="weather-kicker">NO SEU RITMO, NA SUA CIDADE</span><h2 id="weather-title">Previsão do tempo</h2><label for="weather-city" class="sr-only">Tempo na sua cidade</label><select id="weather-city"><option value="palmas">Palmas</option><option value="araguaina">Araguaína</option><option value="gurupi">Gurupi</option><option value="porto-nacional">Porto Nacional</option><option value="paraiso-do-tocantins">Paraíso do Tocantins</option><option value="dianopolis">Dianópolis</option><option value="tocantinopolis">Tocantinópolis</option><option value="mateiros">Mateiros (Jalapão)</option></select><button type="button" class="weather-locate" data-weather-locate>Usar minha localização</button><p class="weather-location-help" data-weather-location-status role="status">A localização é usada somente com sua permissão.</p></div>
+ <div class="weather-status" role="status" aria-live="polite" data-weather-status>Consultando a previsão…</div>
+ <div class="weather-reading" data-weather-data hidden>
+  <div class="weather-current"><svg class="weather-icon" width="64" height="64" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M17 45a11 11 0 1 1 3-21 16 16 0 0 1 30 7 8 8 0 0 1-1 16H17"/><path d="M24 54h19M29 61h9" opacity=".45"/></svg><div><strong data-weather-temp></strong><p data-weather-condition></p></div></div>
+  <div class="weather-stat"><span>Temperatura hoje</span><strong data-weather-range></strong></div>
+  <div class="weather-stat"><span>Chance de chuva</span><strong data-weather-rain></strong></div>
+ </div>
+ <div class="weather-foot"><small data-weather-updated>Horário de São Paulo</small><a href="https://www.weatherapi.com/" target="_blank" rel="noopener noreferrer">Dados: WeatherAPI.com</a></div>
+</section>
+<noscript><p class="weather-noscript">Ative o JavaScript para consultar a previsão do tempo.</p></noscript>

@@ -4,6 +4,7 @@ import {randomBytes} from 'node:crypto';
 import {writeFileSync,readFileSync,existsSync} from 'node:fs';
 import path from 'node:path';
 for(const key of ['DATABASE_URL','SUPABASE_URL','SUPABASE_SECRET_KEY','VERCEL','VERCEL_ENV','INSTAGRAM_APP_ID','INSTAGRAM_APP_SECRET'])delete process.env[key];
+if(existsSync('.env.weather.local'))process.loadEnvFile('.env.weather.local');
 const directory=path.resolve('exports/design-preview');
 const app=await createApp({dataDir:directory,uploadDir:path.join(directory,'uploads'),seed:true});
 const password=existsSync('exports/local-design-access.json')?JSON.parse(readFileSync('exports/local-design-access.json','utf8')).password:randomBytes(12).toString('base64url'),email='redacao@local.test',db=app.locals.db;
