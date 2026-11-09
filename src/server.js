@@ -244,7 +244,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
           blocks=blocks.filter(c=>!cleared.includes(c));resolution=note+' · códigos conferidos: '+cleared.join(', ')+(classified?' · classificação: '+classified:'');
         }
         if(!importedItem.source_approved)blocks.push('SOURCE_UNAUTHORIZED');
-        if(!imageEligible(a,approvedCover))blocks.push('IMAGE_PENDING');
+        if(!imageEligible(a,approvedCover,pending.includes('PHOTO_REVIEW')))blocks.push('IMAGE_PENDING');
         blocks=[...new Set(blocks)];pending=[...new Set(pending)];
         res.locals.sourceItem={...res.locals.sourceItem,blockers:JSON.stringify(blocks)};
         if(desired==='published'&&blocks.length)throw publicationError('Publicação bloqueada: '+blocks.map(c=>issueLabels[c]||issueLabels.UNKNOWN_ALERT).join('; ')+'. Salve o rascunho ou conclua as conferências indicadas.');

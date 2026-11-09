@@ -10,7 +10,7 @@ import {assignTags,tagsFor} from '../src/tags.js';
 import {parseFeed,approvedUrl,publicAddress,isVideoEntry} from '../src/feed-reader.js';
 import {validateGenerated} from '../src/gemini-editor.js';
 import {ingest,runAutomation,reservePublication,trimAutomationQueue,automationPriority,selectAutomationItem} from '../src/automation.js';
-import {automaticImageEligible} from '../src/article-images.js';
+import {automaticImageEligible,creditedImageEligible} from '../src/article-images.js';
 import {validWorkflow} from '../src/workflow-auth.js';
 import {createApp} from '../src/server.js';
 const temporary=()=>mkdtempSync(path.join(os.tmpdir(),'giro63-automation-'));
@@ -158,4 +158,19 @@ test('foto autorizada publica com conferência pendente; G1 continua em revisão
  await runAutomation(db,{now,key:'test',readFeed:async()=>'<rss><channel/></rss>',findImage:async()=>photo,readImage:async()=>Buffer.from('fake-validated-image'),storeImage:async()=>'/uploads/validated.webp',generate:async()=>({result:{title:'Serviço anunciado',summary:'Serviço de transporte',paragraphs:['O serviço foi anunciado.'],category:'cidades',city:'',tags:[],alerts:[],issues:{blockers:[],pending:['SENSITIVE']}},usage:{input:1,output:1}})});
  assert.equal(db.prepare('SELECT status FROM articles').get().status,'published');const item=db.prepare('SELECT * FROM automation_items').get();assert.equal(item.review_pending,1);assert.equal(item.publication_counted,1);assert.equal(db.prepare('SELECT national FROM automation_daily').get().national,1);
  }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('foto creditada sem licença permite conferência posterior, restrição explícita bloqueia',()=>{
+ const image={source_page:'https://g1.globo.com/to/tocantins/noticia/teste.ghtml',image_url:'https://s2-g1.glbimg.com/foto.jpg',photographer:'Autora / Arquivo pessoal',source:'G1 Tocantins',caption:'Imagem da praça',alt:'Praça com árvores',license:''};
+ assert.equal(creditedImageEligible(image),true);assert.equal(automaticImageEligible(image),false);
+ assert.equal(creditedImageEligible({...image,photographer:''}),false);
+ assert.equal(creditedImageEligible({...image,license:'Reprodução proibida'}),false);
+ assert.equal(creditedImageEligible({...image,image_url:'https://example.test/photo.jpg'}),false);
+});
+
+test('publicação com foto pendente não inventa licença e mantém bloqueio factual',async()=>{
+ const {imageEligible,splitIssues}=await import('../src/publication-policy.js');
+ const a={cover:'/uploads/photo.webp',credit:'Autor / Fonte',cover_alt:'Descrição',photo_photographer:'Autor',photo_source:'Fonte',photo_source_url:'https://g1.globo.com/to/tocantins/noticia/foto.ghtml',photo_license:''};
+ assert.equal(imageEligible(a,a.cover),false);assert.equal(imageEligible(a,a.cover,true),true);assert.equal(imageEligible({...a,credit:''},a.cover,true),false);assert.equal(imageEligible(a,'/uploads/other.webp',true),false);
+ assert.deepEqual(splitIssues(['PHOTO_REVIEW','UNCONFIRMED_NUMBER']),{blockers:['UNCONFIRMED_NUMBER'],pending:['PHOTO_REVIEW']});
 });

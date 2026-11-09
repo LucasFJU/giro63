@@ -61,3 +61,9 @@ export function checkImageApproval(body,photo,alt){
 }
 
 export function automaticImageEligible(image){return !!image&&new URL(image.source_page).hostname==='agenciabrasil.ebc.com.br'&&image.source==='Agência Brasil'&&!!image.photographer&&!!image.alt&&!!image.caption&&image.license==='Uso jornalístico com crédito — https://www.gov.br/pt-br/servicos/acessar-material-fotojornalistico-gratuitamente';}
+
+// Editorial policy: credited source photos may be used with a separate pending review.
+export function creditedImageEligible(image){
+ try{sourceImages(image.source_page);approvedUrl(image.image_url,sourceImages(image.source_page));}catch{return false;}
+ return !!image.photographer?.trim()&&!!image.caption?.trim()&&!!image.alt?.trim()&&!/direitos reservados|reprodu[cç][aã]o proibida|republica[cç][aã]o proibida/i.test([image.photographer,image.source,image.caption,image.license].join(' '));
+}
