@@ -8,7 +8,7 @@ import {slugify} from './db.js';
 import {assignTags} from './tags.js';
 import {fetchFeed,parseFeed,approvedUrl,isVideoEntry} from './feed-reader.js';
 import {generateNews} from './gemini-editor.js';
-import {discoverImage,addImageSuggestion,readSuggestedImage,automaticImageEligible} from './article-images.js';
+import {discoverImage,addImageSuggestion,readSuggestedImage,automaticImageEligible,creditedImageEligible} from './article-images.js';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const escape=value=>String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export async function event(db,message,now=Date.now()){await db.prepare('INSERT INTO automation_events(id,created_at,message) VALUES(?,?,?)').run(randomUUID(),new Date(now).toISOString(),message.slice(0,500));}
@@ -89,7 +89,7 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
         const {result,usage}=await generate(item,categories);await db.prepare('UPDATE automation_daily SET input_tokens=input_tokens+?,output_tokens=output_tokens+? WHERE day=?').run(usage.input,usage.output,day);
         let suggestedImage=null;if(['agencia-brasil','g1-tocantins'].includes(item.source_id)&&Date.now()<deadline-9000){try{suggestedImage=await findImage(item.url);}catch{/* Missing images remain blocked until an editor approves a real image. */}}
         let approvedImage=null;
-        if(storeImage&&automaticImageEligible(suggestedImage)){try{approvedImage=await storeImage(await readImage(suggestedImage));}catch{await event(db,'Imagem não importada; revisão prévia: '+item.id,now);}}
+        if(storeImage&&creditedImageEligible(suggestedImage)){try{approvedImage=await storeImage(await readImage(suggestedImage));}catch{await event(db,'Imagem não importada; revisão prévia: '+item.id,now);}}
         await transaction(db,async()=>{
           const permitted=await db.prepare('SELECT active,approved FROM automation_sources WHERE id=?').get(item.source_id),pause=await db.prepare("SELECT value FROM settings WHERE key='automation_paused'").get(),publishing=await db.prepare("SELECT value FROM settings WHERE key='automation_publish'").get();
           const issues=result.issues||splitIssues([...(result.alerts.length?['UNKNOWN_ALERT']:[]),...(result.sensitive?['SENSITIVE']:[]),...(result.tags.length?['TAGS']:[]),...(!result.city?['CITY_ABSENT']:[])]);
@@ -97,6 +97,7 @@ export async function runAutomation(db,{readFeed=fetchFeed,generate=generateNews
           if(!permitted.approved||!permitted.active)issues.blockers.push('SOURCE_UNAUTHORIZED');
           // Only verified own Agência Brasil photography can be imported without editor approval.
           if(!approvedImage)issues.blockers.push('IMAGE_PENDING');
+          else if(!automaticImageEligible(suggestedImage))issues.pending.push('PHOTO_REVIEW');
           const publish=!!approvedImage&&!issues.blockers.length&&pause?.value==='0'&&publishing?.value==='1'&&await reservePublication(db,item.region==='regional',now);
           const stamp=new Date(now).toISOString(),slug=(slugify(result.title).slice(0,100)||'noticia')+'-'+item.id.slice(0,8),body=result.paragraphs.map(p=>'<p>'+escape(p)+'</p>').join('')+sourceFooter(item.source_name,item.url);
           const saved=await db.prepare('INSERT INTO articles(slug,title,summary,body,category,city,byline,cover,cover_alt,credit,sources,status,created_at,updated_at,published_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(slug,result.title,result.summary,body,result.category,result.city,'Giro63 - Redação',approvedImage||'/images/og-giro63.png',approvedImage?suggestedImage.alt:'Arte ilustrativa com a marca Giro63',approvedImage?[suggestedImage.photographer,suggestedImage.source].filter(Boolean).join(' / '):'Arte ilustrativa Giro63',item.source_name+' — '+item.url,publish?'published':'review',stamp,stamp,publish?stamp:null);
