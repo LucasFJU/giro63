@@ -12,22 +12,23 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 25
     if: github.ref == 'refs/heads/main'
     steps:
       - name: Executar lote com identidade temporária
         shell: bash
         run: |
           node --input-type=module <<'JS'
-          for(let batch=0;batch<4;batch++){
+          for(let batch=0;batch<20;batch++){
             // Each request gets its own one-use identity and bounded server execution.
             const tokenUrl=new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
             tokenUrl.searchParams.set('audience','giro63-automation');
             const issued=await fetch(tokenUrl,{headers:{Authorization:'Bearer '+process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}});
             if(!issued.ok)throw Error('Não foi possível obter a identidade do workflow.');
             const {value}=await issued.json();
-            const response=await fetch('https://giro63.vercel.app/internal/automation/run',{method:'POST',headers:{Authorization:'Bearer '+value},signal:AbortSignal.timeout(70000)});
+            const response=await fetch('https://giro63.vercel.app/internal/automation/run'+(batch?'?collect=0':''),{method:'POST',headers:{Authorization:'Bearer '+value},signal:AbortSignal.timeout(70000)});
             if(!response.ok)throw Error('Automação respondeu HTTP '+response.status);
             const result=await response.json();console.log('Lote '+(batch+1)+': '+result.message+' Itens processados: '+(result.processed||0));
+            if(result.hasMore===false){console.log('Sem próximo candidato elegível ou limite atingido.');break;}
           }
           JS

@@ -174,3 +174,16 @@ test('publicação com foto pendente não inventa licença e mantém bloqueio fa
  assert.equal(imageEligible(a,a.cover),false);assert.equal(imageEligible(a,a.cover,true),true);assert.equal(imageEligible({...a,credit:''},a.cover,true),false);assert.equal(imageEligible(a,'/uploads/other.webp',true),false);
  assert.deepEqual(splitIssues(['PHOTO_REVIEW','UNCONFIRMED_NUMBER']),{blockers:['UNCONFIRMED_NUMBER'],pending:['PHOTO_REVIEW']});
 });
+
+test('bloqueadas permanecem em revisão e a quinta candidata publica sem ocupar suas cotas',async()=>{
+ const dir=temporary(),db=openDatabase(dir),now=Date.parse('2026-11-09T16:00:00Z');try{
+ await initializeEditorial(db);db.prepare("UPDATE automation_sources SET active=1,approved=1 WHERE id='g1-tocantins'").run();db.prepare("UPDATE settings SET value='0' WHERE key='automation_paused'").run();db.prepare("UPDATE settings SET value='1' WHERE key='automation_publish'").run();
+ for(let n=0;n<5;n++)db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').run(n+'-substitute','g1-tocantins',n+'-substitute','https://g1.globo.com/to/tocantins/noticia/'+n+'.ghtml','Notícia '+n,'Informações confirmadas sobre serviços públicos para a comunidade.','fp'+n,new Date(now-n*1000).toISOString(),new Date(now).toISOString());
+ let feedCalls=0,generated=0;const options={now,key:'test',readFeed:async()=>{feedCalls++;return '<rss><channel/></rss>';},generate:async()=>{generated++;return {result:{title:'Serviço público anunciado',summary:'Serviço para a comunidade.',paragraphs:['Informações sobre o serviço anunciado.'],category:'cidades',city:'',tags:[],alerts:[],issues:{blockers:[],pending:[]}},usage:{input:1,output:1}};},findImage:async url=>({source_page:url,image_url:'https://s2-g1.glbimg.com/foto.jpg',source:'G1 Tocantins',photographer:'Autora',caption:'Praça da cidade',alt:'Praça da cidade',license:url.endsWith('/4.ghtml')?'':'Reprodução proibida'}),readImage:async()=>Buffer.from('validated'),storeImage:async()=>'/uploads/validated.webp'};
+ for(let n=0;n<5;n++){const result=await runAutomation(db,{...options,collect:n===0});assert.equal(result.hasMore,n<4);}
+ assert.equal(feedCalls,1);assert.equal(generated,5);assert.equal(db.prepare("SELECT count(*) n FROM articles WHERE status='review'").get().n,4);assert.equal(db.prepare("SELECT count(*) n FROM articles WHERE status='published'").get().n,1);
+ const daily=db.prepare('SELECT * FROM automation_daily').get();assert.equal(daily.calls,5);assert.equal(daily.published,1);assert.equal(daily.national,0);
+ assert.match(db.prepare("SELECT blockers FROM automation_items WHERE id='0-substitute'").get().blockers,/IMAGE_PENDING/);assert.match(db.prepare("SELECT review_reasons FROM automation_items WHERE id='4-substitute'").get().review_reasons,/PHOTO_REVIEW/);
+ const exhausted=await runAutomation(db,{...options,collect:false});assert.equal(exhausted.hasMore,false);assert.equal(generated,5);
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});
