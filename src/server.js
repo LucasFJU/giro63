@@ -1,3 +1,4 @@
+import {mountWeather} from './weather.js';
 import {waitUntil} from '@vercel/functions';
 import {mountInstagram} from './instagram.js';
 import {syncInstagramArticle} from './instagram-jobs.js';
@@ -45,6 +46,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
   app.use(helmet({contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],styleSrc:["'self'"],imgSrc:["'self'",'data:','blob:',...(cloud?[media.publicOrigin]:[])],fontSrc:["'self'"],formAction:["'self'"],upgradeInsecureRequests:cloud?[]:null}},strictTransportSecurity:cloud?undefined:false}));
   app.use('/uploads',express.static(uploadDir,{dotfiles:'deny',setHeaders:res=>res.setHeader('X-Content-Type-Options','nosniff')}));
   app.use(express.static(path.join(root,'public'),{dotfiles:'deny'}));
+  mountWeather(app);
   app.use(express.urlencoded({extended:false,limit:'300kb'}));
   const panelSession=session({name:'giro63.sid',secret:cloud?process.env.SESSION_SECRET:readFileSync(secretFile,'utf8'),store:new SQLiteSessionStore(db),resave:false,saveUninitialized:false,cookie:{httpOnly:true,sameSite:'strict',secure:cloud,maxAge:8*3600000}});
   // OAuth uses a one-use DB state. Do not overwrite the existing Strict panel cookie on a cross-site callback.
