@@ -8,7 +8,7 @@ import {cropImage,imageFromPage,photoValues,addImageSuggestion,readSuggestedImag
 const page='https://agenciabrasil.ebc.com.br/noticia/teste',candidate={image_url:'https://imagens.ebc.com.br/foto.jpg',source_page:page,source:'Agência Brasil',photographer:'Fotógrafa de teste',caption:'Foto de arquivo.',alt:'Duas faixas coloridas.',license:''};
 test('sugestões restringem origem, mantêm direitos pendentes e capturam crédito da própria foto',async()=>{
  const html=`<meta content="${candidate.image_url}" property="og:image"><meta name="twitter:image:alt" content="Uma imagem. Foto: Autora/Agência Brasil"><figcaption class="credito-foto">© Autora/ Agência Brasil/Arquivo</figcaption>`;
- const result=imageFromPage(html,page);assert.equal(result.photographer,'Autora');assert.equal(result.license,'');assert.equal(result.caption,'Uma imagem.');assert.equal(imageFromPage(html.replace(candidate.image_url,'https://127.0.0.1/foto.jpg'),page),null);assert.equal(imageFromPage(html.replace(candidate.image_url,'https://imagens.ebc.com.br/logo.png'),page),null);
+ const result=imageFromPage(html,page);assert.equal(result.photographer,'Autora');assert.match(result.license,/Uso jornalístico/);assert.equal(result.caption,'Uma imagem.');assert.equal(imageFromPage(html.replace(candidate.image_url,'https://127.0.0.1/foto.jpg'),page),null);assert.equal(imageFromPage(html.replace(candidate.image_url,'https://imagens.ebc.com.br/logo.png'),page),null);
  await assert.rejects(readSuggestedImage({...candidate,image_url:'https://127.0.0.1/imagem'}),/domínios aprovados/);
  assert.throws(()=>photoValues({photo_source_url:'javascript:alert(1)'}));assert.throws(()=>photoValues({photo_x:'110'}));
 });

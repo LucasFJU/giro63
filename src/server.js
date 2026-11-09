@@ -85,7 +85,7 @@ export async function createApp({dataDir=process.env.GIRO63_DATA_DIR||path.join(
   }
   mountTags(app,{db,requireUser,editor,checkCsrf,listing});
   await mountInstagram(app,{db,requireUser,editor,checkCsrf,dataDir,readImage:imageBuffer,secret:cloud?process.env.SESSION_SECRET:readFileSync(secretFile,'utf8'),background:process.env.VERCEL_ENV==='production',waitUntil,meta:instagramMeta,storage:instagramStore});
-  mountAutomation(app,{db,requireUser,editor,checkCsrf});
+  mountAutomation(app,{db,requireUser,editor,checkCsrf,storeImage:async buffer=>{const cover=await saveImage({buffer});await media.generate(cover);return cover;}});
   app.get('/ultimas',async (req,res)=>(await listing(req,res,{heading:'Últimas notícias',intro:'Acompanhe o Tocantins, uma história de cada vez.'})));
   app.get('/editoria/:slug',async (req,res,next)=>{const cat=res.locals.categories.find(c=>c[0]===req.params.slug);if(!cat)return next();(await listing(req,res,{heading:cat[1],where:'category=?',params:[cat[0]],intro:'Contexto e informação sobre o que faz parte da sua vida.'}));});
   app.get('/cidade/:slug',async (req,res,next)=>{const city=res.locals.cities.find(c=>slugify(c)===req.params.slug);if(!city)return next();(await listing(req,res,{heading:city,where:'normalize_search(city)=normalize_search(?)',params:[city],intro:'As histórias que aproximam a sua cidade.'}));});
