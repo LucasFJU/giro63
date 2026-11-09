@@ -51,7 +51,7 @@ export async function trimAutomationQueue(db,now=Date.now()){
     await db.prepare("UPDATE automation_items SET state='discarded',note='Expirado: mais de 48 horas desde a publicação original.',updated_at=? WHERE state IN ('queued','failed','waiting') AND article_id IS NULL AND original_at<?").run(stamp,cutoff);
     const running=await db.prepare("SELECT s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state='processing'").all();
     let slots=running.length,national=running.filter(i=>i.region!=='regional').length;
-    const waiting=await db.prepare("SELECT i.id,i.original_at,i.state,i.attempts,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE s.active=1 AND s.approved=1 AND i.state IN ('queued','failed','waiting') AND i.article_id IS NULL").all();
+    const waiting=await db.prepare("SELECT i.id,i.original_at,i.state,i.attempts,s.region FROM automation_items i JOIN automation_sources s ON s.id=i.source_id WHERE i.state IN ('queued','failed','waiting') AND i.article_id IS NULL").all();
     const eligible=[];
     for(const item of waiting){if(automationPriority(item,now)===null){await db.prepare("UPDATE automation_items SET state='discarded',note='Fora do dia atual',updated_at=? WHERE id=? AND state IN ('queued','failed','waiting')").run(stamp,item.id);}else if(item.attempts<2)eligible.push(item);}
     const nationalPlaces=Math.min(Math.max(0,4-national),eligible.filter(i=>i.region!=='regional').length);
