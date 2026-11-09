@@ -40,7 +40,7 @@ export function imageFromPage(html,page){
  const alt=description.replace(/\s*Foto:.*$/i,'').slice(0,250);
  const credit=plain(/<(figcaption|div)\b[^>]*class=["'][^"']*credito-foto[^"']*["'][^>]*>([\s\S]*?)<\/\1>/i.exec(html)?.[2]||'').replace(/^©\s*/, '');
  const own=/Agência Brasil(?:\/Arquivo)?\s*$/i.test(credit),photographer=own?credit.replace(/\s*\/?\s*Agência Brasil(?:\/Arquivo)?\s*$/i,'').slice(0,250):'';
- return {image_url:url,source_page:page,source:own?'Agência Brasil':credit||'Agência Brasil — crédito a conferir',photographer,caption:description.replace(/\s*Foto:.*$/i,'').slice(0,500),alt,license:''};
+ return {image_url:url,source_page:page,source:own?'Agência Brasil':credit||'Agência Brasil — crédito a conferir',photographer,caption:description.replace(/\s*Foto:.*$/i,'').slice(0,500),alt,license:own&&photographer&&!/direitos reservados|republicação[^<]{0,80}proibida/i.test(html)?'Uso jornalístico com crédito — https://www.gov.br/pt-br/servicos/acessar-material-fotojornalistico-gratuitamente':''};
 }
 export async function discoverImage(page,{read}={}){
  sourceImages(page);
@@ -59,3 +59,5 @@ export async function readSuggestedImage(value){
 export function checkImageApproval(body,photo,alt){
  if(body.image_rights_confirmed!=='on'||body.image_context_confirmed!=='on'||!photo.photo_photographer||!photo.photo_source||!photo.photo_source_url||!photo.photo_license||!alt)throw Error('Para aprovar a sugestão, preencha fotógrafo, fonte, licença e descrição acessível e confirme os direitos e a relação com a notícia.');
 }
+
+export function automaticImageEligible(image){return !!image&&new URL(image.source_page).hostname==='agenciabrasil.ebc.com.br'&&image.source==='Agência Brasil'&&!!image.photographer&&!!image.alt&&!!image.caption&&image.license==='Uso jornalístico com crédito — https://www.gov.br/pt-br/servicos/acessar-material-fotojornalistico-gratuitamente';}

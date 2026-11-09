@@ -10,10 +10,10 @@
  <label for="image">Enviar imagem</label><input id="image" name="image" type="file" data-max-mb="<%= uploadLimitMb %>" accept="image/jpeg,image/png,image/webp">
  <p class="field-help">JPG, PNG ou WebP estático. Até <%= uploadLimitMb %> MB e 25 megapixels. A foto inteira será preservada na matéria.</p>
  <div class="photo-main-preview photo-frame photo-frame-cover"><img data-photo-preview alt="Prévia da imagem da matéria" <% if(article.cover){ %>src="<%= article.cover %>"<% } %>></div>
- <label for="credit">Crédito exibido</label><input id="credit" name="credit" value="<%= article.credit||'' %>" maxlength="250"><p class="field-help">Ex.: Nome do fotógrafo / Agência. Os dados de origem, quando preenchidos, montam este crédito ao salvar.</p>
- <details class="photo-options" id="photo-description"><summary>Legenda e descrição acessível</summary> <label for="photo_caption">Legenda</label><textarea id="photo_caption" name="photo_caption" rows="3" maxlength="500"><%= article.photo_caption||'' %></textarea>
+ <label for="credit">Autor ou fonte da foto</label><input id="credit" name="credit" value="<%= article.credit||'' %>" maxlength="250"><p class="field-help">Ex.: Nome do fotógrafo / Agência. Os dados de origem, quando preenchidos, montam este crédito ao salvar.</p>
+ <div id="photo-description"> <label for="photo_caption">Legenda</label><textarea id="photo_caption" name="photo_caption" rows="3" maxlength="500"><%= article.photo_caption||'' %></textarea>
  <label for="cover_alt">Texto alternativo</label><input id="cover_alt" name="cover_alt" value="<%= article.cover_alt||'' %>" maxlength="250"><p class="field-help">Descreva a imagem para quem utiliza leitor de tela. Não repita apenas o título.</p>
-</details>
+</div>
  <details class="photo-options" id="photo-rights"><summary>Origem e direitos de uso</summary><p class="field-help">Registre quem criou a imagem e a autorização para utilizá-la.</p> <label for="photo_photographer">Fotógrafo / autor da arte</label><input id="photo_photographer" name="photo_photographer" value="<%= article.photo_photographer||'' %>" maxlength="250">
  <label for="photo_source">Fonte da imagem</label><input id="photo_source" name="photo_source" value="<%= article.photo_source||'' %>" maxlength="250" placeholder="Agência, assessoria ou acervo próprio">
  <label for="photo_source_url">Endereço original ou comprovação</label><input id="photo_source_url" name="photo_source_url" type="url" value="<%= article.photo_source_url||'' %>" maxlength="1000" placeholder="https://">

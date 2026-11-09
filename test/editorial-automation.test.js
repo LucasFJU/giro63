@@ -10,6 +10,7 @@ import {assignTags,tagsFor} from '../src/tags.js';
 import {parseFeed,approvedUrl,publicAddress,isVideoEntry} from '../src/feed-reader.js';
 import {validateGenerated} from '../src/gemini-editor.js';
 import {ingest,runAutomation,reservePublication,trimAutomationQueue,automationPriority,selectAutomationItem} from '../src/automation.js';
+import {automaticImageEligible} from '../src/article-images.js';
 import {validWorkflow} from '../src/workflow-auth.js';
 import {createApp} from '../src/server.js';
 const temporary=()=>mkdtempSync(path.join(os.tmpdir(),'giro63-automation-'));
@@ -37,7 +38,7 @@ test('fila persistida, publicação, revisão, duplicatas, pausa e quota de cham
   const generate=async()=>({result:{title:'Novo transporte em Palmas',summary:'Serviços anunciados.',paragraphs:['A prefeitura anunciou serviços de transporte em Palmas.'],category:'cidades',city:'Palmas',tags:['Transporte'],sensitive:false,alerts:[]},usage:{input:20,output:30}});
   const options={readFeed:async()=>'<rss><channel><item><title>antigo</title></item></channel></rss>',generate,key:'test'};
   await runAutomation(db,options);assert.equal(db.prepare('SELECT status FROM articles').get().status,'review');assert.deepEqual(JSON.parse(db.prepare('SELECT blockers FROM automation_items').get().blockers),['IMAGE_PENDING']);assert.equal((await tagsFor(db,1))[0].slug,'transporte');assert.equal(db.prepare('SELECT calls FROM automation_daily').get().calls,1);
-  await ingest(db,source,[{...entry,summary:'Atualização '+summary}]);assert.match(db.prepare('SELECT note FROM automation_items').get().note,/atualizada/);assert.equal(db.prepare('SELECT title FROM articles').get().title,'Novo transporte em Palmas');
+  await ingest(db,source,[{...entry,summary:'Atualização '+summary}]);assert.match(db.prepare('SELECT note FROM automation_items').get().note,/Imagem/);assert.match(db.prepare("SELECT message FROM automation_events WHERE message LIKE 'Fonte atualizada:%'").get().message,/atualizada/);assert.equal(db.prepare('SELECT title FROM articles').get().title,'Novo transporte em Palmas');
   db.prepare("UPDATE settings SET value='1' WHERE key='automation_paused'").run();assert.match((await runAutomation(db,options)).message,/pausada/);
   db.prepare('UPDATE automation_daily SET published=9,national=2').run();assert.equal(await reservePublication(db,false),true);assert.equal(await reservePublication(db,true),false);
  }finally{db.close();rmSync(dir,{recursive:true,force:true});}
@@ -116,7 +117,7 @@ test('vídeos e edições não entram na coleta; vídeos pendentes são retirado
  const dir=temporary(),db=openDatabase(dir);try{await initializeEditorial(db);const source=db.prepare("SELECT * FROM automation_sources WHERE id='g1-tocantins'").get(),stamp=new Date().toISOString();
  await ingest(db,source,[{title:'VÍDEOS: Jornal',url:'https://g1.globo.com/to/tocantins/edicao/teste.ghtml',uid:'v',summary:'Resumo '.repeat(50),originalAt:stamp}]);assert.equal(db.prepare('SELECT count(*) n FROM automation_items').get().n,0);
  const id=article(db);db.prepare("INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,updated_at,article_id) VALUES('v','g1-tocantins','v','https://g1.globo.com/to/tocantins/edicao/teste.ghtml','VÍDEOS: Jornal','Resumo','f',?,'review',?,?)").run(stamp,stamp,id);
- await trimAutomationQueue(db);assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='v'").get().state,'discarded');assert.equal(db.prepare('SELECT status FROM articles WHERE id=?').get(id).status,'published');
+ await trimAutomationQueue(db);assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='v'").get().state,'review');assert.equal(db.prepare('SELECT status FROM articles WHERE id=?').get(id).status,'published');
  }finally{db.close();rmSync(dir,{recursive:true,force:true});}
 });
 
@@ -124,7 +125,7 @@ test('prioridade diária: duas horas exatas, nacionais, regionais antigas e cota
  const dir=temporary(),db=openDatabase(dir),now=Date.parse('2026-11-07T15:00:00Z');try{await initializeEditorial(db);db.prepare("UPDATE automation_sources SET active=1,approved=1").run();
  const add=(id,region,date,state='queued',attempts=0)=>db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,attempts,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id,region==='regional'?'g1-tocantins':'agencia-brasil',id,'https://example.test/'+id,id,'Material','f'+id,date,state,attempts,new Date(now).toISOString());
  add('old-region','regional','2026-11-07T12:59:59.999Z');add('national','national','2026-11-07T14:30:00Z');add('boundary','regional','2026-11-07T13:00:00Z');add('yesterday','regional','2026-11-07T02:59:59Z');add('future','regional','2026-11-07T15:00:01Z');add('already-review','regional','2026-11-07T14:59:00Z','review');add('exhausted','regional','2026-11-07T14:59:00Z','failed',2);
- assert.equal((await selectAutomationItem(db,now)).id,'boundary');db.prepare("UPDATE automation_items SET state='review' WHERE id='boundary'").run();assert.equal((await selectAutomationItem(db,now)).id,'national');
+ assert.equal((await selectAutomationItem(db,now)).id,'boundary');db.prepare("UPDATE automation_items SET state='review' WHERE id='boundary'").run();assert.equal((await selectAutomationItem(db,now)).id,'old-region');
  db.prepare("INSERT INTO automation_daily(day,national) VALUES('2026-11-07',3)").run();assert.equal((await selectAutomationItem(db,now)).id,'old-region');db.prepare("UPDATE automation_daily SET published=10").run();assert.equal(await selectAutomationItem(db,now),null);db.prepare("UPDATE automation_daily SET published=0,calls=20").run();assert.equal(await selectAutomationItem(db,now),null);
  await trimAutomationQueue(db,now);assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='yesterday'").get().state,'discarded');assert.equal(db.prepare("SELECT note FROM automation_items WHERE id='yesterday'").get().note,'Fora do dia atual');assert.equal(db.prepare("SELECT state FROM automation_items WHERE id='already-review'").get().state,'review');
  assert.equal(automationPriority({region:'regional',original_at:'2026-11-07T02:59:59Z'},Date.parse('2026-11-07T03:00:00Z')),null);assert.equal(automationPriority({region:'regional',original_at:'2026-11-07T03:00:00Z'},Date.parse('2026-11-07T03:00:00Z')),0);
@@ -136,5 +137,25 @@ test('sem notícias do dia não chama Gemini; falha regional permite nacional',a
  await runAutomation(db,empty);assert.equal(generated,0);assert.equal(db.prepare('SELECT count(*) n FROM automation_daily').get().n,0);
  db.prepare("INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,state,updated_at) VALUES('national','agencia-brasil','n','https://example.test/n','Notícia','Material','fp','2026-11-07T14:30:00Z','queued','2026-11-07T14:30:00Z')").run();
  await runAutomation(db,{...empty,readFeed:async()=>{throw Error('Fonte indisponível');}});assert.equal(generated,1);assert.equal(db.prepare("SELECT calls FROM automation_daily WHERE day='2026-11-07'").get().calls,1);assert.match(db.prepare("SELECT last_error FROM automation_sources WHERE id='g1-tocantins'").get().last_error,/indisponível/);assert.ok(db.prepare("SELECT message FROM automation_events WHERE message LIKE 'Seleção: Nacional do dia%'").get());
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+
+test('reserva repõe vagas, não ressuscita descartados e sequência depende de publicações',async()=>{
+ const dir=temporary(),db=openDatabase(dir),now=Date.parse('2026-11-09T16:00:00Z');try{await initializeEditorial(db);db.prepare("UPDATE automation_sources SET active=1,approved=1").run();
+ for(let i=0;i<30;i++)db.prepare('INSERT INTO automation_items(id,source_id,uid,url,title,summary,fingerprint,original_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').run('r'+i,i<20?'g1-tocantins':'agencia-brasil','r'+i,'https://example.test/r'+i,'Título '+i,'Resumo','f'+i,new Date(now-i*1000).toISOString(),new Date(now).toISOString());
+ await trimAutomationQueue(db,now);assert.equal(db.prepare("SELECT count(*) n FROM automation_items WHERE state='queued'").get().n,20);assert.equal(db.prepare("SELECT count(*) n FROM automation_items WHERE state='waiting'").get().n,10);
+ const first=await selectAutomationItem(db,now);assert.equal(first.region,'regional');db.prepare("UPDATE automation_items SET state='review' WHERE id=?").run(first.id);await trimAutomationQueue(db,now);assert.equal(db.prepare("SELECT count(*) n FROM automation_items WHERE state='queued'").get().n,20);
+ for(let n=0;n<10;n++){db.prepare('INSERT INTO automation_daily(day,published) VALUES(?,?) ON CONFLICT(day) DO UPDATE SET published=excluded.published').run('2026-11-09',n);assert.equal((await selectAutomationItem(db,now)).region,[3,7,9].includes(n)?'national':'regional');}
+ await trimAutomationQueue(db,now+24*3600000);assert.equal(db.prepare("SELECT count(*) n FROM automation_items WHERE state IN ('queued','waiting')").get().n,0);assert.equal(db.prepare("SELECT state FROM automation_items WHERE id=?").get(first.id).state,'review');
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});
+test('foto autorizada publica com conferência pendente; G1 continua em revisão',async()=>{
+ const dir=temporary(),db=openDatabase(dir),now=Date.parse('2026-11-09T16:00:00Z');try{await initializeEditorial(db);db.prepare("UPDATE automation_sources SET active=1,approved=1 WHERE id='agencia-brasil'").run();db.prepare("UPDATE settings SET value='0' WHERE key='automation_paused'").run();db.prepare("UPDATE settings SET value='1' WHERE key='automation_publish'").run();
+ const source=db.prepare("SELECT * FROM automation_sources WHERE id='agencia-brasil'").get();await ingest(db,source,[{uid:'auto-photo',url:'https://agenciabrasil.ebc.com.br/noticia/teste',title:'Serviço anunciado',summary:'O serviço de transporte foi anunciado para atender moradores da cidade.',originalAt:new Date(now).toISOString()}],now);
+ const photo={source_page:'https://agenciabrasil.ebc.com.br/noticia/teste',image_url:'https://imagens.ebc.com.br/foto.jpg',source:'Agência Brasil',photographer:'Autora',alt:'Ônibus na rua',caption:'Ônibus na rua',license:'Uso jornalístico com crédito — https://www.gov.br/pt-br/servicos/acessar-material-fotojornalistico-gratuitamente'};
+ assert.equal(automaticImageEligible(photo),true);assert.equal(automaticImageEligible({...photo,source_page:'https://g1.globo.com/to/tocantins/teste.ghtml'}),false);
+ await runAutomation(db,{now,key:'test',readFeed:async()=>'<rss><channel/></rss>',findImage:async()=>photo,readImage:async()=>Buffer.from('fake-validated-image'),storeImage:async()=>'/uploads/validated.webp',generate:async()=>({result:{title:'Serviço anunciado',summary:'Serviço de transporte',paragraphs:['O serviço foi anunciado.'],category:'cidades',city:'',tags:[],alerts:[],issues:{blockers:[],pending:['SENSITIVE']}},usage:{input:1,output:1}})});
+ assert.equal(db.prepare('SELECT status FROM articles').get().status,'published');const item=db.prepare('SELECT * FROM automation_items').get();assert.equal(item.review_pending,1);assert.equal(item.publication_counted,1);assert.equal(db.prepare('SELECT national FROM automation_daily').get().national,1);
  }finally{db.close();rmSync(dir,{recursive:true,force:true});}
 });
